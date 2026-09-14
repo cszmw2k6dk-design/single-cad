@@ -44,6 +44,8 @@ VERSION_REPO_PATH = "single%20line-cad/version.json"
 VERSION_SOURCES = [
     ("raw", RAW_BASE + "/single%20line-cad/version.json"),
     ("jsdelivr", JSD_BASE + "/single%20line-cad/version.json"),
+    # GitHub 的 contents 接口有 ~60 秒响应缓存：加一个无意义的时间戳参数绕开它，
+    # 否则刚发完版本立刻检查会拿到旧版本号（"--push 完却显示没新版"）。
     ("api", API_BASE + "/contents/" + VERSION_REPO_PATH),
 ]
 
@@ -157,6 +159,9 @@ def fetch_remote_version():
     """
     errs = []
     for name, url in VERSION_SOURCES:
+        if name == "api":
+            # 绕开 contents 接口的响应缓存（~60 秒）
+            url = url + "?ref=" + GH_BRANCH + "&_=%d" % int(time.time())
         try:
             with _get(url, TIMEOUT) as r:
                 raw = r.read()

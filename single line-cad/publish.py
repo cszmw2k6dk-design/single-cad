@@ -182,16 +182,24 @@ def main(argv=None):
     print("[4/4] 回读远端确认 …")
     try:
         import app_update as upd
-        r = upd.check()
-        if r.get("ok"):
-            print("      远端版本: %s" % r.get("remote"))
-            if str(r.get("remote")) == new_ver:
-                print("      确认成功：客户端下次检查更新就能拿到 %s" % new_ver)
-            else:
-                print("      ⚠ 远端版本是 %s，不是刚发的 %s（GitHub 缓存，等一会儿再看）"
-                      % (r.get("remote"), new_ver))
-        else:
-            print("      回读失败（不影响推送）：%s" % r.get("error"))
+        import time as _t
+        got = None
+        # GitHub 有几十秒缓存，刚推完可能还读到旧值 —— 重试几次再下结论
+        for attempt in range(5):
+            r = upd.check()
+            if not r.get("ok"):
+                print("      回读失败（不影响推送）：%s" % r.get("error"))
+                break
+            got = str(r.get("remote"))
+            if got == new_ver:
+                break
+            print("      远端还是 %s（GitHub 缓存），%d 秒后重试…" % (got, 8))
+            _t.sleep(8)
+        if got == new_ver:
+            print("      确认成功：客户端下次检查更新就能拿到 %s" % new_ver)
+        elif got:
+            print("      ⚠ 远端读到的是 %s，不是刚发的 %s（可能仍在缓存，稍后再看）"
+                  % (got, new_ver))
     except Exception as ex:
         print("      回读异常（不影响推送）：%s" % ex)
 
