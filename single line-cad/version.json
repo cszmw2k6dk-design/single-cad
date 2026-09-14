@@ -1,7 +1,7 @@
 {
-  "version": "20260914.2038",
-  "time": "2026-09-14 20:38:22",
-  "notes": "一键发版脚本 publish.cmd/publish.py + 使用说明补充",
-  "commit": "7d4dab0",
+  "version": "20260914.2041",
+  "time": "2026-09-14 20:41:11",
+  "notes": "更新缓存规避 + 修复打包脚本告警",
+  "commit": "e4aa822",
   "url": "https://codeload.github.com/cszmw2k6dk-design/single-cad/zip/refs/heads/main"
 }

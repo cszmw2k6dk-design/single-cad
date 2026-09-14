@@ -20,6 +20,7 @@ import json
 import os
 import ssl
 import sys
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -124,7 +125,9 @@ def local_note():
 
 # --------------------------- 网络 ---------------------------
 def _headers():
-    h = {"User-Agent": "barnett-single-line-updater"}
+    # no-cache：GitHub 的 raw/API 都有几十秒缓存，刚发完版本马上查会拿到旧值
+    h = {"User-Agent": "barnett-single-line-updater",
+         "Cache-Control": "no-cache", "Pragma": "no-cache"}
     try:
         with open(TOKEN_PATH, encoding="utf-8") as f:
             tok = f.read().strip()
@@ -136,6 +139,12 @@ def _headers():
 
 
 def _get(url, timeout):
+    # 给 URL 挂一个时间戳参数，绕开 CDN 的缓存（jsDelivr / raw 都有缓存）
+    sep = "&" if "?" in url else "?"
+    if "/contents/" in url:          # API 的 contents 接口用 ?ref= 形式，别塞时间戳
+        pass
+    else:
+        url = url + sep + "_=%d" % int(time.time())
     req = urllib.request.Request(url, headers=_headers())
     ctx = ssl.create_default_context()
     return urllib.request.urlopen(req, timeout=timeout, context=ctx)

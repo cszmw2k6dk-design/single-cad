@@ -85,7 +85,7 @@ A: 需要重启本程序（关掉窗口再双击 exe）。块库是启动时读�
 
 【发版（把改动推给用户的程序）】
 双击项目根目录的 publish.cmd，或者命令行：
-    python "single line-cad\publish.py" -m "这次改了什么"
+    python "single line-cad/publish.py" -m "这次改了什么"
 它会自动升版本号、提交、推到 GitHub；推完你的程序点「检查更新」就能收到。
 """
 
