@@ -8,6 +8,12 @@ venv/
 # 生成产物与运行输出（体积大、可随时重新生成）
 single line-cad/out/
 
+# 打包产物：exe / 中间文件 / 整理好的发布文件夹（体积大，用脚本重新生成即可）
+single line-cad/dist/
+single line-cad/build/
+single line-cad/*.spec.bak
+Barnett单线图生成器/
+
 # 手工/自动备份
 *_备份/
 *.bak
@@ -20,3 +26,4 @@ _旧输出_已损坏/
 ~$*
 .DS_Store
 Thumbs.db
+single line-cad/启动日志.txt

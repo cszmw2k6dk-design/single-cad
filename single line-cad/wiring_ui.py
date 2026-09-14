@@ -26,11 +26,21 @@ import wiring_raw as wr
 import array_gen as ag
 import cad_draw as cd
 
+try:                                  # 在线更新（可选，缺了也不影响生成）
+    import app_update as upd
+except Exception:
+    upd = None
+
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BLOCKS_DIR = ui.BLOCKS_DIR
-OUTDIR = os.path.join(HERE, "out")
-FRAMES_DIR = os.path.join(HERE, "templates")
+try:                                  # 打包成 exe 后走 runtime_paths（输出落在 exe 旁边）
+    import runtime_paths as _rp
+    OUTDIR = _rp.OUTDIR
+    FRAMES_DIR = _rp.FRAMES_DIR
+except Exception:                     # 源码运行：维持原样
+    OUTDIR = os.path.join(HERE, "out")
+    FRAMES_DIR = os.path.join(HERE, "templates")
 DEFAULT_PORT = 8770
 
 
@@ -38,6 +48,24 @@ def list_frames():
     if not os.path.isdir(FRAMES_DIR):
         return []
     return [f for f in sorted(os.listdir(FRAMES_DIR)) if f.lower().endswith(".dxf")]
+
+
+def make_server(port0=DEFAULT_PORT, tries=20):
+    """起一个多线程 HTTP 服务。端口被占就从 port0 往后试，返回 (httpd, port)。
+
+    多线程的原因：生成请求跑着的时候，界面上的进度轮询还得能进来。
+    """
+    class S(socketserver.ThreadingTCPServer):
+        allow_reuse_address = True
+        daemon_threads = True
+
+    port = port0
+    for _ in range(tries):
+        try:
+            return S(("127.0.0.1", port), Handler), port
+        except OSError:
+            port += 1
+    raise OSError("端口 %d 起不来（%d 个都被占用）" % (port0, tries))
 
 
 CODE_FILES = ("wiring_raw.py", "wiring_ui.py", "array_gen.py",
@@ -223,6 +251,16 @@ def list_blocks():
     return names
 
 
+def app_version():
+    """给界面显示的版本号：在线更新过就显示更新后的版本。"""
+    if upd is not None:
+        try:
+            return upd.local_version(), upd.local_note()
+        except Exception:
+            pass
+    return code_version(), "内置版本"
+
+
 # ----------------------------- HTTP -----------------------------
 HTML = r"""<!doctype html>
 <html lang="zh"><head><meta charset="utf-8">
@@ -259,9 +297,19 @@ HTML = r"""<!doctype html>
  #log{white-space:pre-wrap;font-size:12px;color:var(--muted);margin-top:8px}
 </style></head>
 <body>
-<header><h1>连线生成器</h1>
-<div class="sub">选块（可重复）→ 组成链 → 生成连完线的产品
-  · 代码版本 {{VER}}（换过代码要重启这个窗口，否则跑的还是旧代码）</div></header>
+<header>
+  <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+    <h1 style="flex:0 0 auto">连线生成器</h1>
+    <div style="flex:1 1 320px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span id="verTxt" style="font-size:13px;opacity:.9">版本 {{VER}}（{{VERNOTE}}）</span>
+      <button class="ghost" id="updBtn" onclick="checkUpdate()"
+              style="padding:5px 12px;font-size:13px">检查更新</button>
+      <span id="updMsg" style="font-size:13px;opacity:.95"></span>
+    </div>
+  </div>
+  <div class="sub">选块（可重复）→ 组成链 → 生成连完线的产品
+    · 代码版本 {{VER}}（换过代码要重启这个窗口，否则跑的还是旧代码）</div>
+</header>
 <div class="wrap">
   <div class="panel"><h2>① 块库（点击加入链）</h2>
     <div class="grid" id="blocks"></div></div>
@@ -477,6 +525,30 @@ async function gen(){
 }
 loadBlocks();
 setMode('chain');
+
+// ---------- 在线更新 ----------
+function updMsg(t,color){const e=document.getElementById('updMsg');e.textContent=t;e.style.color=color||'';}
+async function checkUpdate(apply){
+  const b=document.getElementById('updBtn'); b.disabled=true; updMsg('检查中…');
+  try{
+    const r=await fetch('/api/update'+(apply?'?apply=1':'')); const d=await r.json();
+    if(!d.ok){ updMsg('✗ '+(d.error||'检查失败'),'#ffd7d7'); return; }
+    if(d.message) updMsg(d.message, d.applied? '#c8f7d0':'#ffd7d7');
+    else if(d.newer) updMsg('发现新版本 '+d.remote+'（当前 '+d.local+'）','#fff3c4');
+    else updMsg('已是最新（'+d.local+'）','#c8f7d0');
+    if(d.newer && !apply){
+      if(confirm('发现新版本 '+d.remote+'（当前 '+d.local+'）\n'+(d.notes||'')+'\n\n现在下载更新吗？\n（下载完关掉窗口重新打开即生效）')){
+        return checkUpdate(true);
+      }
+    }
+    if(d.applied){
+      document.getElementById('verTxt').textContent='版本 '+d.remote+'（已下载，重启生效）';
+      alert('更新已下载完成。\n\n请关掉本窗口，重新双击程序即生效。');
+    }
+  }catch(e){ updMsg('✗ 网络错误：'+e,'#ffd7d7'); }
+  finally{ b.disabled=false; }
+}
+checkUpdate();     // 启动时静默检查一次（失败不影响使用）
 </script>
 </body></html>
 """
@@ -494,9 +566,40 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _api_update(self, path):
+        """在线更新接口。
+
+        GET  /api/update           → 查有没有新版本
+        GET  /api/update?apply=1   → 下载并装上新版本（装完要重启程序才生效）
+        """
+        if upd is None:
+            self._send(200, json.dumps({"ok": False,
+                                        "error": "更新模块不可用（app_update.py 缺失）"}
+                                       ).encode("utf-8"), "application/json")
+            return
+        try:
+            if "apply=1" in path:
+                set_progress(1, "开始下载更新")
+                ok, msg = upd.download_and_install(progress=progress_cb)
+                set_progress(100 if ok else 0, "更新下载完成" if ok else "更新失败")
+                info = upd.check()
+                info.update({"applied": ok, "message": msg})
+                self._send(200, json.dumps(info).encode("utf-8"), "application/json")
+                return
+            self._send(200, json.dumps(upd.check()).encode("utf-8"), "application/json")
+        except Exception as ex:
+            import traceback
+            self._send(200, json.dumps(
+                {"ok": False, "error": "%s: %s" % (type(ex).__name__, ex),
+                 "trace": traceback.format_exc().strip().splitlines()[-3:]}
+            ).encode("utf-8"), "application/json")
+
     def do_GET(self):
         if self.path.startswith("/api/progress"):
             self._send(200, json.dumps(PROGRESS).encode("utf-8"), "application/json")
+            return
+        if self.path.startswith("/api/update"):
+            self._api_update(self.path)
             return
         if self.path.startswith("/api/blocks"):
             from urllib.parse import unquote
@@ -535,7 +638,9 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send(404, b"not found")
         else:
-            self._send(200, HTML.replace("{{VER}}", code_version()).encode("utf-8"))
+            _v, _vn = app_version()
+            self._send(200, HTML.replace("{{VER}}", _v).replace("{{VERNOTE}}", _vn)
+                       .encode("utf-8"))
 
     def do_POST(self):
         try:
@@ -698,25 +803,40 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
+    ap.add_argument("--browser", action="store_true",
+                    help="强制用浏览器打开（默认：能开桌面窗口就用桌面窗口）")
+    ap.add_argument("--title", default="Barnett 单线图生成器")
     args = ap.parse_args()
 
-    class S(socketserver.ThreadingTCPServer):
-        # 多线程：生成请求跑着的时候，进度轮询还能进来（单线程会被堵住 → 进度条不动）
-        allow_reuse_address = True
-        daemon_threads = True
-
-    port = args.port
-    httpd = None
-    for _ in range(20):
-        try:
-            httpd = S(("127.0.0.1", port), Handler); break
-        except OSError:
-            port += 1
+    httpd, port = make_server(args.port)
     url = "http://127.0.0.1:%d" % port
-    print("连线生成器已启动:", url)
+    print("单线图生成器已启动:", url)
     print("代码版本:", code_version(), "(改过代码要重启本进程才生效)")
     print("块库:", BLOCKS_DIR)
     print("输出:", OUTDIR)
+
+    # ---- 优先开一个**真正的桌面窗口**（pywebview + Edge WebView2）----
+    # 打包成 exe 后用户要的是“双击出窗口”，不是“双击开浏览器”。
+    # 拿不到窗口能力时（没装 WebView2 / 没装 pywebview）自动退回浏览器，不会开不起来。
+    if not args.browser:
+        try:
+            import webview
+        except Exception as ex:
+            print("没装桌面窗口组件（%s），改用浏览器打开" % type(ex).__name__)
+        else:
+            t = threading.Thread(target=httpd.serve_forever, daemon=True)
+            t.start()
+            print("正在打开桌面窗口…（关掉窗口即退出程序）")
+            try:
+                webview.create_window(args.title, url, width=1280, height=860,
+                                      min_size=(960, 640), text_select=True)
+                webview.start()          # 阻塞到窗口关闭
+            except Exception as ex:
+                print("桌面窗口启动失败（%s: %s），改用浏览器打开" % (type(ex).__name__, ex))
+            else:
+                print("窗口已关闭，程序退出。")
+                return
+
     threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     try:
         httpd.serve_forever()

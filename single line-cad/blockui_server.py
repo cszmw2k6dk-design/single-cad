@@ -26,9 +26,15 @@ from http.server import BaseHTTPRequestHandler
 
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-LIB = os.path.join(HERE, "blocklib")
-MANIFEST = os.path.join(LIB, "_manifest.csv")
-BLOCKS_DIR = os.path.join(LIB, "blocks")
+try:                                  # 打包成 exe 后走 runtime_paths（块库在 exe 旁边）
+    import runtime_paths as _rp
+    LIB = _rp.BLOCKLIB_DIR
+    MANIFEST = _rp.MANIFEST
+    BLOCKS_DIR = _rp.BLOCKS_DIR
+except Exception:                     # 源码运行 / 单独拷这个文件时，维持原样
+    LIB = os.path.join(HERE, "blocklib")
+    MANIFEST = os.path.join(LIB, "_manifest.csv")
+    BLOCKS_DIR = os.path.join(LIB, "blocks")
 DEFAULT_PORT = 8765
 
 
