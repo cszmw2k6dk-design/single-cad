@@ -1,0 +1,13 @@
+# 块库注册表 (Block Registry)  --  由 blockui_server.py 管理
+# 格式: ID,BLOCK,FILE,PREFIX,XSCALE,YSCALE,ROT,ATTRS
+CBX,CBX,CBX.dwg,,1,1,0,
+END-NEG,END-NEG,END-NEG.dwg,,1,1,0,
+FUSE,FUSE,FUSE.dwg,,1,1,0,
+Fmale,Fmale,Fmale.dwg,,1,1,0,
+MIDDLE-PV,MIDDLE-PV,MIDDLE-PV.dwg,,1,1,0,
+MOTOR,MOTOR,MOTOR.dwg,,1,1,0,
+Male,Male,Male.dwg,,1,1,0,
+NEG,NEG,NEG.dwg,,1,1,0,
+POS,POS,POS.dwg,,1,1,0,
+PV-POS,PV-POS,PV-POS.dwg,,1,1,0,
+防尘塞长,防尘塞长,防尘塞长.dwg,,1,1,0,

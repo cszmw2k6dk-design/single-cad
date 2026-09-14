@@ -1,0 +1,52 @@
+{
+  "meta": {
+    "project": "Barnett Solar & BESS",
+    "owner": "Southern Company",
+    "drawn_by": "Voltage LLC",
+    "title": "SINGLE LINE DIAGRAM",
+    "revision": "V1",
+    "date": "2026-09-07",
+    "sheet_no": "SLD-001"
+  },
+  "grid": {
+    "col_gap": 40,
+    "row_gap": 22
+  },
+  "nodes": [
+    { "id": "PCS-101", "type": "INVERTER", "group": "G1", "ac_kw": 250, "strings": 12, "fuse": "25A" },
+    { "id": "PCS-102", "type": "INVERTER", "group": "G1", "ac_kw": 250, "strings": 12, "fuse": "25A" },
+    { "id": "PCS-103", "type": "INVERTER", "group": "G1", "ac_kw": 250, "strings": 14, "fuse": "25A" },
+    { "id": "PCS-104", "type": "INVERTER", "group": "G1", "ac_kw": 250, "strings": 12, "fuse": "25A" },
+    { "id": "PCS-201", "type": "INVERTER", "group": "G2", "ac_kw": 250, "strings": 12, "fuse": "25A" },
+    { "id": "PCS-202", "type": "INVERTER", "group": "G2", "ac_kw": 250, "strings": 12, "fuse": "25A" },
+    { "id": "PCS-203", "type": "INVERTER", "group": "G2", "ac_kw": 250, "strings": 14, "fuse": "25A" },
+    { "id": "PCS-204", "type": "INVERTER", "group": "G2", "ac_kw": 250, "strings": 12, "fuse": "25A" },
+    { "id": "TR-G1", "type": "TRANSFORMER", "kva": 2000, "hv": "34.5kV", "group": "G1" },
+    { "id": "TR-G2", "type": "TRANSFORMER", "kva": 2000, "hv": "34.5kV", "group": "G2" },
+    { "id": "MV-SWGR", "type": "MV_SWITCHGEAR", "hv": "34.5kV" },
+    { "id": "MAIN-TR", "type": "MAIN_TRANSFORMER", "kva": 60000, "hv": "34.5kV", "lv": "115kV" },
+    { "id": "POI", "type": "POINT_OF_INTERCONNECTION", "hv": "115kV" },
+    { "id": "BESS-101", "type": "BESS_UNIT", "mw": 1, "mwh": 4 },
+    { "id": "BESS-102", "type": "BESS_UNIT", "mw": 1, "mwh": 4 },
+    { "id": "BESS-PCS-101", "type": "INVERTER", "group": "BESS", "ac_kw": 1000, "strings": 0, "fuse": "N/A" },
+    { "id": "BESS-PCS-102", "type": "INVERTER", "group": "BESS", "ac_kw": 1000, "strings": 0, "fuse": "N/A" }
+  ],
+  "edges": [
+    { "from": "PCS-101", "to": "TR-G1", "type": "AC_LV", "label": "600V" },
+    { "from": "PCS-102", "to": "TR-G1", "type": "AC_LV", "label": "600V" },
+    { "from": "PCS-103", "to": "TR-G1", "type": "AC_LV", "label": "600V" },
+    { "from": "PCS-104", "to": "TR-G1", "type": "AC_LV", "label": "600V" },
+    { "from": "PCS-201", "to": "TR-G2", "type": "AC_LV", "label": "600V" },
+    { "from": "PCS-202", "to": "TR-G2", "type": "AC_LV", "label": "600V" },
+    { "from": "PCS-203", "to": "TR-G2", "type": "AC_LV", "label": "600V" },
+    { "from": "PCS-204", "to": "TR-G2", "type": "AC_LV", "label": "600V" },
+    { "from": "TR-G1", "to": "MV-SWGR", "type": "MV_FEEDER", "label": "34.5kV" },
+    { "from": "TR-G2", "to": "MV-SWGR", "type": "MV_FEEDER", "label": "34.5kV" },
+    { "from": "MV-SWGR", "to": "MAIN-TR", "type": "MV_FEEDER", "label": "34.5kV" },
+    { "from": "MAIN-TR", "to": "POI", "type": "MV_FEEDER", "label": "115kV" },
+    { "from": "BESS-101", "to": "BESS-PCS-101", "type": "DC_LINK", "label": "DC" },
+    { "from": "BESS-102", "to": "BESS-PCS-102", "type": "DC_LINK", "label": "DC" },
+    { "from": "BESS-PCS-101", "to": "MV-SWGR", "type": "AC_LV", "label": "MV" },
+    { "from": "BESS-PCS-102", "to": "MV-SWGR", "type": "AC_LV", "label": "MV" }
+  ]
+}

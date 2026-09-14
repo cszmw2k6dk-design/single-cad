@@ -1,0 +1,33 @@
+产品图纸模板 V4 用户块清单 (共31)
+
+24x36_Title_Block                          实体=214    层=0,DEFPOINTS,G-ANNO-TEXT,TB-FRAME,TB-TEXT,_U+56FE_U+5C42 1,tb
+Drawing Title - Imperial                   实体=5      层=0
+block 24                                   实体=35     层=0,_U+56FE_U+5C42 1
+dayin                                      实体=3      层=0
+Frame                                      实体=187    层=0,G-ANNO-TEXT,_TCH_MASK,_U+56FE_U+5C42 1
+防尘塞                                        实体=32     层=0,51
+防尘塞2                                       实体=53     层=0,51
+4                                          实体=1313   层=0,_TCH_MASK
+防尘塞短                                       实体=2      层=0,51
+防尘塞长                                       实体=2      层=0
+block 3                                    实体=86     层=0,_U+56FE_U+5C42 1
+LABLE                                      实体=9      层=0,_U+56FE_U+5C42 1
+CU - AL                                    实体=1570   层=0,di,xian
+Voltage-R                                  实体=90     层=0,_U+56FE_U+5C42 1
+Lable 2                                    实体=9      层=0
+L1                                         实体=508    层=0,Make2D___U+9359_U+7EFE__U+93C5_U+20AC_U+6C31_U+568E
+T3                                         实体=572    层=0,Make2D___U+9359_U+7EFE__U+59DD_U+FF45_U+578F_U+7EFE,Make2D
+CU-AL                                      实体=1570   层=0,di,xian
+1-2                                        实体=3853   层=0,di,xian
+SW_CENTERMARKSYMBOL_0                      实体=8      层=0,10
+20                                         实体=1645   层=0,10
+111                                        实体=2499   层=0,di,xian
+block 2                                    实体=2      层=0,_U+56FE_U+5C42 1
+24x36_Title_Block 2                        实体=181    层=0,G-ANNO-TEXT,_U+56FE_U+5C42 1
+1-6                                        实体=1645   层=0,10
+1                                          实体=2499   层=0,di,xian
+24x36_Title_Block 3                        实体=219    层=0,DEFPOINTS,G-ANNO-TEXT,TB-FRAME,TB-TEXT,_U+56FE_U+5C42 1,tb
++1                                         实体=774    层=0,Make2D___U+9359_U+7EFE__U+93C5_U+20AC_U+6C31_U+568E
+al-cu                                      实体=1570   层=0,di,xian
+fuse                                       实体=1570   层=0,di,xian
+lynx 1-4                                   实体=2499   层=0,di,xian

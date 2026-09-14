@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# 生成产物与运行输出（体积大、可随时重新生成）
+single line-cad/out/
+
+# 手工/自动备份
+*_备份/
+*.bak
+_bak_*
+_手册_加*章前备份.docx
+_旧输出_已损坏/
+
+# 临时文件
+*.tmp
+~$*
+.DS_Store
+Thumbs.db
