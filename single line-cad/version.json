@@ -1,7 +1,7 @@
 {
-  "version": "20260914.2036",
-  "time": "2026-09-14 20:36:48",
-  "notes": "改 push_via_api.py；加 publish.cmd、publish.py",
-  "commit": "aa102d2",
+  "version": "20260914.2038",
+  "time": "2026-09-14 20:38:22",
+  "notes": "一键发版脚本 publish.cmd/publish.py + 使用说明补充",
+  "commit": "7d4dab0",
   "url": "https://codeload.github.com/cszmw2k6dk-design/single-cad/zip/refs/heads/main"
 }

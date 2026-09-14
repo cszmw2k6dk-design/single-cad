@@ -82,6 +82,11 @@ A: 需要重启本程序（关掉窗口再双击 exe）。块库是启动时读�
 发现新版会问你要不要下载；下载完成后**关掉窗口重新打开**即生效
 （更新下来的代码放在 _update/ 里，不会动这个 exe）。
 更新源：https://github.com/cszmw2k6dk-design/single-cad
+
+【发版（把改动推给用户的程序）】
+双击项目根目录的 publish.cmd，或者命令行：
+    python "single line-cad\publish.py" -m "这次改了什么"
+它会自动升版本号、提交、推到 GitHub；推完你的程序点「检查更新」就能收到。
 """
 
 
