@@ -76,6 +76,12 @@ A: 需要重启本程序（关掉窗口再双击 exe）。块库是启动时读�
     python -m PyInstaller build_app.spec --noconfirm
     python assemble_app.py
 第一条生成 exe，第二条把它和块库/模板整理成本文件夹。
+
+【在线更新】
+程序启动时会自动去 GitHub 仓库查一次版本，界面右上角也有「检查更新」按钮。
+发现新版会问你要不要下载；下载完成后**关掉窗口重新打开**即生效
+（更新下来的代码放在 _update/ 里，不会动这个 exe）。
+更新源：https://github.com/cszmw2k6dk-design/single-cad
 """
 
 

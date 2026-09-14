@@ -23,7 +23,7 @@ datas = [
     (os.path.join(SRC, "blocklib"), "blocklib"),
     (os.path.join(SRC, "templates"), "templates"),
 ]
-for _doc in ("Barnett连线自动化_交接手册.docx", "图纸模板_块清单.txt"):
+for _doc in ("Barnett连线自动化_交接手册.docx", "图纸模板_块清单.txt", "version.json"):
     _p = os.path.join(SRC, _doc)
     if os.path.exists(_p):
         datas.append((_p, "."))

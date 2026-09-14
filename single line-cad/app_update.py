@@ -32,11 +32,29 @@ GH_REPO = "single-cad"
 GH_BRANCH = "main"
 
 RAW_BASE = "https://raw.githubusercontent.com/%s/%s/%s" % (GH_OWNER, GH_REPO, GH_BRANCH)
-VERSION_URL = RAW_BASE + "/version.json"
-ARCHIVE_URL = "https://codeload.github.com/%s/%s/zip/refs/heads/%s" % (GH_OWNER, GH_REPO, GH_BRANCH)
+JSD_BASE = "https://cdn.jsdelivr.net/gh/%s/%s@%s" % (GH_OWNER, GH_REPO, GH_BRANCH)
+API_BASE = "https://api.github.com/repos/%s/%s" % (GH_OWNER, GH_REPO)
 
-TIMEOUT = 20                      # 拉 version.json 的超时（秒）
-DL_TIMEOUT = 120                  # 下代码包的超时（秒）
+# 代码里的 version.json 在仓库里是这个相对路径（仓库根下还有一层程序目录）
+VERSION_REPO_PATH = "single%20line-cad/version.json"
+
+# 拉 version.json 的候选地址，从上往下挨个试：有的网络能通 GitHub API 但连不上
+# raw.githubusercontent.com（企业防火墙常见），所以必须留后手。
+VERSION_SOURCES = [
+    ("raw", RAW_BASE + "/single%20line-cad/version.json"),
+    ("jsdelivr", JSD_BASE + "/single%20line-cad/version.json"),
+    ("api", API_BASE + "/contents/" + VERSION_REPO_PATH),
+]
+
+# 代码包（zip）的候选地址，同上
+ARCHIVE_SOURCES = [
+    ("codeload", "https://codeload.github.com/%s/%s/zip/refs/heads/%s" % (GH_OWNER, GH_REPO, GH_BRANCH)),
+    ("api", API_BASE + "/zipball/" + GH_BRANCH),
+]
+ARCHIVE_URL = ARCHIVE_SOURCES[0][1]
+
+TIMEOUT = 12                      # 拉 version.json 的单路超时（秒）
+DL_TIMEOUT = 180                  # 下代码包的单路超时（秒）
 
 # 打包成 exe 时，只有这些文件是我们需要的源码（其余是块库/模板/文档，不参与更新）
 CODE_SUFFIX = ".py"
@@ -124,20 +142,33 @@ def _get(url, timeout):
 
 
 def fetch_remote_version():
-    """拉远端 version.json。返回 (dict 或 None, 错误说明)。"""
-    try:
-        with _get(VERSION_URL, TIMEOUT) as r:
-            return json.loads(r.read().decode("utf-8")), ""
-    except urllib.error.HTTPError as ex:
-        if ex.code == 404:
-            return None, ("更新服务器上还没有 version.json（HTTP 404）："
-                          "先用 make_release.py --push 发一次版")
-        if ex.code in (401, 403):
-            return None, ("读不到 version.json（HTTP %d）：仓库可能是私有的，"
-                          "需要在程序旁边放 update_token.txt（GitHub token）" % ex.code)
-        return None, "读不到 version.json（HTTP %d）" % ex.code
-    except Exception as ex:
-        return None, "连不上更新服务器（%s: %s）" % (type(ex).__name__, ex)
+    """拉远端 version.json。返回 (dict 或 None, 错误说明)。
+
+    依次试 raw / jsDelivr / GitHub API（API 那条会把 base64 内容解出来）。
+    """
+    errs = []
+    for name, url in VERSION_SOURCES:
+        try:
+            with _get(url, TIMEOUT) as r:
+                raw = r.read()
+            if name == "api":
+                # API 返回 {"content": "<base64>", "encoding": "base64", ...}
+                info = json.loads(raw.decode("utf-8"))
+                import base64
+                raw = base64.b64decode(info.get("content", ""))
+            return json.loads(raw.decode("utf-8")), ""
+        except urllib.error.HTTPError as ex:
+            if ex.code == 404 and name == "raw":
+                errs.append("更新服务器上还没有 version.json（HTTP 404）："
+                            "先用 make_release.py --push 发一次版")
+            elif ex.code in (401, 403):
+                errs.append("%s: HTTP %d（仓库可能是私有的，需要 update_token.txt）"
+                            % (name, ex.code))
+            else:
+                errs.append("%s: HTTP %d" % (name, ex.code))
+        except Exception as ex:
+            errs.append("%s: %s" % (name, type(ex).__name__))
+    return None, "连不上更新源（" + "；".join(errs) + "）"
 
 
 def check():
@@ -170,8 +201,6 @@ def _is_newer(remote, local):
 # --------------------------- 下载并安装 ---------------------------
 def download_and_install(url=None, progress=None):
     """下载代码包 → 解压覆盖到 `_update/`。返回 (ok, 说明)。"""
-    url = url or ARCHIVE_URL
-
     def pg(pct, stage):
         if progress:
             try:
@@ -179,11 +208,18 @@ def download_and_install(url=None, progress=None):
             except Exception:
                 pass
 
-    pg(5, "连接更新服务器")
-    try:
-        resp = _get(url, DL_TIMEOUT)
-    except Exception as ex:
-        return False, "下载代码包失败（%s: %s）" % (type(ex).__name__, ex)
+    # 多路回退：codeload 连不上就试 GitHub API 的 zipball
+    cands = ([( "指定地址", url)] if url else list(ARCHIVE_SOURCES))
+    resp, errs = None, []
+    for name, u in cands:
+        pg(5, "连接更新服务器（%s）" % name)
+        try:
+            resp = _get(u, DL_TIMEOUT)
+            break
+        except Exception as ex:
+            errs.append("%s: %s" % (name, type(ex).__name__))
+    if resp is None:
+        return False, "下载代码包失败（" + "；".join(errs) + "）"
 
     tmp = os.path.join(_app_dir(), "_update.zip")
     try:
@@ -212,13 +248,17 @@ def download_and_install(url=None, progress=None):
         n = 0
         with zipfile.ZipFile(tmp) as z:
             for name in z.namelist():
-                base = os.path.basename(name)
-                # 只取 .py，并且只取顶层（GitHub 的包会多一层 仓库名-分支/ 目录）
-                if not base.endswith(CODE_SUFFIX) or "/" not in name.strip("/"):
+                if name.endswith("/"):
                     continue
-                rel = name.split("/", 1)[1] if "/" in name else name
+                parts = name.split("/")
+                if not parts[-1].endswith(CODE_SUFFIX):
+                    continue
+                # GitHub 的包外面多一层 仓库名-分支/；本仓库的代码又在 single line-cad/ 下
+                rel = "/".join(parts[1:]) if len(parts) > 1 else parts[-1]
+                if rel.startswith("single line-cad/"):
+                    rel = rel[len("single line-cad/"):]
                 if "/" in rel:
-                    continue                      # 只要顶层文件，子目录不收
+                    continue                      # 只要代码目录下的顶层 .py
                 with z.open(name) as src, open(os.path.join(UPDATE_DIR, rel), "wb") as dst:
                     dst.write(src.read())
                 n += 1
