@@ -1,7 +1,7 @@
 {
-  "version": "20260914.1217",
-  "time": "2026-09-14 20:17:19",
-  "notes": "加在线更新：启动检查版本、一键下载新代码",
-  "commit": "6c7d63a",
+  "version": "20260914.2036",
+  "time": "2026-09-14 20:36:48",
+  "notes": "改 push_via_api.py；加 publish.cmd、publish.py",
+  "commit": "aa102d2",
   "url": "https://codeload.github.com/cszmw2k6dk-design/single-cad/zip/refs/heads/main"
 }

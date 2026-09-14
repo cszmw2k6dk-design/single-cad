@@ -104,9 +104,18 @@ def main(argv=None):
         return 0
 
     base_tree = api("GET", "/repos/%s/%s/git/commits/%s" % (OWNER, REPO, base), tok)["tree"]["sha"]
+    # 拉出远端现有文件清单（路径 -> blob sha），只提交**内容确实变了**的文件。
+    # 这样即使远端有我这没有的提交，也不会被整棵树覆盖掉。
+    remote_tree = api("GET", "/repos/%s/%s/git/trees/%s?recursive=1"
+                      % (OWNER, REPO, base_tree), tok)
+    remote_sha = {t["path"]: t["sha"] for t in remote_tree.get("tree", [])
+                  if t.get("type") == "blob"}
+
     tree_items, changed = [], []
     for rel, abs_p in sorted(files.items()):
         sha = blob_sha(abs_p)
+        if remote_sha.get(rel) == sha:
+            continue                       # 远端内容一样，不用动
         with open(abs_p, "rb") as f:
             data = f.read()
         if args.dry_run:
@@ -120,11 +129,14 @@ def main(argv=None):
         tree_items.append({"path": rel, "mode": "100644", "type": "blob", "sha": blob["sha"]})
         changed.append(rel)
 
-    print("要上传 %d 个文件" % len(changed))
+    print("要上传 %d 个文件（其余与远端一致，跳过）" % len(changed))
     for c in changed[:60]:
         print("   ", c)
     if len(changed) > 60:
         print("    ... 还有", len(changed) - 60, "个")
+    if not changed:
+        print("远端内容已经和本地一致，不需要推送")
+        return 0
     if args.dry_run:
         return 0
 
