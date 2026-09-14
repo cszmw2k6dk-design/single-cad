@@ -147,6 +147,24 @@ def main(argv=None):
     api("PATCH", "/repos/%s/%s/git/refs/heads/%s" % (OWNER, REPO, BRANCH), tok,
         {"sha": commit["sha"], "force": False})
     print("已推送: %s" % commit["sha"][:7])
+
+    # API 提交是**叠在远端提交上**建的，本地分支并没有这个提交 —— 于是本地和远端
+    # 历史分叉，下一次 `git push` 会被拒（non-fast-forward），又得走 API。
+    # 这里顺手把本地对齐到远端：两边文件本来就在推送内容里，落盘内容不会变，
+    # 但历史合一，之后 `git push` 恢复正常。
+    try:
+        if git("status", "--porcelain"):
+            print("（工作区还有未提交改动，跳过本地历史对齐）")
+        else:
+            subprocess.run(["git", "fetch", "origin", BRANCH], cwd=ROOT,
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace")
+            subprocess.run(["git", "checkout", "-B", BRANCH, "origin/" + BRANCH],
+                           cwd=ROOT, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
+            print("已把本地 %s 对齐到远端（历史合一，下次 git push 可直接用）" % BRANCH)
+    except Exception as ex:
+        print("（本地历史对齐失败，不影响推送结果：%s）" % ex)
     return 0
 
 
