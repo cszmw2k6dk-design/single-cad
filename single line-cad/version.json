@@ -1,7 +1,7 @@
 {
-  "version": "20260914.2043",
-  "time": "2026-09-14 20:43:46",
-  "notes": "更新检查绕缓存 + 发版回读重试",
-  "commit": "f3b6587",
+  "version": "20260914.2050",
+  "time": "2026-09-14 20:50:30",
+  "notes": "版本检查改为以 GitHub API 为准，彻底绕开 CDN 缓存",
+  "commit": "99619eb",
   "url": "https://codeload.github.com/cszmw2k6dk-design/single-cad/zip/refs/heads/main"
 }

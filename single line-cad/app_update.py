@@ -42,11 +42,12 @@ VERSION_REPO_PATH = "single%20line-cad/version.json"
 # 拉 version.json 的候选地址，从上往下挨个试：有的网络能通 GitHub API 但连不上
 # raw.githubusercontent.com（企业防火墙常见），所以必须留后手。
 VERSION_SOURCES = [
-    ("raw", RAW_BASE + "/single%20line-cad/version.json"),
-    ("jsdelivr", JSD_BASE + "/single%20line-cad/version.json"),
-    # GitHub 的 contents 接口有 ~60 秒响应缓存：加一个无意义的时间戳参数绕开它，
-    # 否则刚发完版本立刻检查会拿到旧版本号（"--push 完却显示没新版"）。
+    # 顺序很重要：以 **GitHub API 的 contents 接口为准** —— 它读的是"当前提交里的内容"，
+    # 不会像 raw / jsDelivr 那样被 CDN 缓存住旧版本（实测 raw 会返回几分钟前的旧
+    # version.json，害得刚发完版却提示"已是最新"）。
     ("api", API_BASE + "/contents/" + VERSION_REPO_PATH),
+    ("jsdelivr", JSD_BASE + "/single%20line-cad/version.json"),
+    ("raw", RAW_BASE + "/single%20line-cad/version.json"),
 ]
 
 # 代码包（zip）的候选地址，同上
@@ -185,6 +186,15 @@ def fetch_remote_version():
     return None, "连不上更新源（" + "；".join(errs) + "）"
 
 
+def tip_commit():
+    """远端分支当前的提交号（API 读，最权威）。拿不到就返回空串。"""
+    try:
+        with _get(API_BASE + "/commits/" + GH_BRANCH, TIMEOUT) as r:
+            return (json.loads(r.read().decode("utf-8")) or {}).get("sha", "")
+    except Exception:
+        return ""
+
+
 def check():
     """检查有没有新版本。返回 dict（给界面用），不会抛异常。"""
     local = local_version()
@@ -222,8 +232,15 @@ def download_and_install(url=None, progress=None):
             except Exception:
                 pass
 
+    # 先把版本号定下来（顺便证明更新源是通的），下载完直接写状态，不用再查一次
+    remote, _verr = fetch_remote_version()
+    remote_ver = str((remote or {}).get("version", "") or "")
+    tip = tip_commit()
+
     # 多路回退：codeload 连不上就试 GitHub API 的 zipball
-    cands = ([( "指定地址", url)] if url else list(ARCHIVE_SOURCES))
+    cands = [("指定地址", url)] if url else list(ARCHIVE_SOURCES)
+    if not url:      # API 那条给的就是当前提交，最即时，优先走
+        cands = [c for c in cands if c[0] == "api"] + [c for c in cands if c[0] != "api"]
     resp, errs = None, []
     for name, u in cands:
         pg(5, "连接更新服务器（%s）" % name)
@@ -283,9 +300,14 @@ def download_and_install(url=None, progress=None):
     if not n:
         return False, "代码包里没找到可用的 .py 文件"
 
-    remote, _err = fetch_remote_version()
-    save_state({"version": (remote or {}).get("version", "unknown"),
+    if not remote_ver:
+        remote, _err = fetch_remote_version()
+        remote_ver = str((remote or {}).get("version", "") or "")
+        remote = remote or {}
+    save_state({"version": remote_ver or "unknown",
                 "files": n,
-                "time": (remote or {}).get("time", "")})
+                "tip": tip,
+                "time": (remote or {}).get("time", ""),
+                "time_local": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
     pg(100, "更新已下载")
     return True, "更新已下载：%d 个文件（关掉窗口重新打开即生效）" % n
