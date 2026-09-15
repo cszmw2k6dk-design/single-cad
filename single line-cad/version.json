@@ -1,7 +1,7 @@
 {
-  "version": "20260915.2149",
-  "time": "2026-09-15 21:49:25",
-  "notes": "同步工具修正：缺远端对象时不再回退本地；镜像提交带走新文件",
-  "commit": "669b676",
+  "version": "20260915.2153",
+  "time": "2026-09-15 21:53:05",
+  "notes": "推送守卫：本地缺远端对象时不再回退本地分支",
+  "commit": "5479326",
   "url": "https://codeload.github.com/cszmw2k6dk-design/single-cad/zip/refs/heads/main"
 }

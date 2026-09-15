@@ -139,16 +139,18 @@ def align_ref(remote):
     print("本地没有远端那个提交对象，改为本地重建一个等价提交 …")
     with _get(API + "/commits/" + remote, 60) as resp:
         info = json.loads(resp.read().decode("utf-8"))
-    # 注意：这个接口返回的提交对象**不带 tree 字段**，所以不能拿它比树；
-    # 内容一致性由前面的"整包覆盖 + 只有那 10 个文件不同"来保证。
-    # 我们只要重建一个 parent 指向远端父提交、tree 用本地内容的提交即可 ——
-    # 因为本地内容就是刚从这个提交的源码包解出来的。
+    # 注意：这个接口返回的提交对象**不带 tree 字段**，所以不能照抄。
+    # parent 必须用**本地存在的**提交（否则 commit-tree 报 not a valid object），
+    # 内容一致性由"整包覆盖 + 忽略行尾逐文件比对"保证。
+    subprocess.run(["git", "add", "-A"], cwd=ROOT, capture_output=True,
+                   text=True, encoding="utf-8", errors="replace")
     local_tree = subprocess.run(["git", "write-tree"], cwd=ROOT, capture_output=True,
                                 text=True, encoding="utf-8", errors="replace").stdout.strip()
     print("  本地 tree: %s" % local_tree[:10])
 
     c = info["commit"]
-    parent = info["parents"][0]["sha"] if info.get("parents") else ""
+    parent = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True,
+                            text=True, encoding="utf-8", errors="replace").stdout.strip()
     env = dict(os.environ,
                GIT_AUTHOR_NAME=c["author"]["name"], GIT_AUTHOR_EMAIL=c["author"]["email"],
                GIT_COMMITTER_NAME=c["committer"]["name"],

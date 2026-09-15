@@ -159,10 +159,25 @@ def main(argv=None):
             subprocess.run(["git", "fetch", "origin", BRANCH], cwd=ROOT,
                            capture_output=True, text=True, encoding="utf-8",
                            errors="replace")
-            subprocess.run(["git", "checkout", "-B", BRANCH, "origin/" + BRANCH],
-                           cwd=ROOT, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace")
-            print("已把本地 %s 对齐到远端（历史合一，下次 git push 可直接用）" % BRANCH)
+            # 三个条件全满足才敢动本地分支，缺一个就只提示：
+            #   1. fetch 成功（这台机器上常用的失败模式就是 fetch 直接连不上）
+            #   2. origin/<branch> 确实指向刚推上去的那个提交（否则是陈旧引用）
+            #   3. 本地有那个提交对象
+            # 为什么这么谨慎：一旦拿到**陈旧的** origin 引用就 `checkout -B`，
+            # 会把本地分支回退到旧状态 —— 等于把刚提交的东西丢了（今天踩了两回）。
+            fetched_ok = git("rev-parse", "origin/" + BRANCH) == commit["sha"]
+            has_obj = subprocess.run(
+                ["git", "cat-file", "-e", commit["sha"] + "^{commit}"],
+                cwd=ROOT, capture_output=True).returncode == 0
+            if fetched_ok and has_obj:
+                subprocess.run(["git", "checkout", "-B", BRANCH, commit["sha"]],
+                               cwd=ROOT, capture_output=True, text=True,
+                               encoding="utf-8", errors="replace")
+                print("已把本地 %s 对齐到远端（历史合一，下次 git push 可直接用）" % BRANCH)
+            else:
+                print("（本地历史没动：%s；要同步请用 sync_from_github.py）"
+                      % ("git 端口不通、origin 引用是旧的" if not fetched_ok
+                         else "本地缺该提交对象"))
     except Exception as ex:
         print("（本地历史对齐失败，不影响推送结果：%s）" % ex)
     return 0
