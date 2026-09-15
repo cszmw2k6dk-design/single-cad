@@ -8,8 +8,9 @@ array_gen.py -- 光伏阵列 + 线束 自动生成（交接手册第 13 章 · �
 
 用法:
   python array_gen.py --frame "templates/外框模板(EU) 09072026.dxf" \
-      --module PVMODULE --n-per 20 --n-strings 4 --gap-x 2 --gap-y 30 \
-      --harness 正极支线,正极支线,正极支线,正极支线,FUSE \
+      --module-first PV-POS --module-mid MIDDLE-PV --module-last END-NEG \
+      --n-per 20 --n-strings 4 --gap-x 2 --gap-y 30 \
+      --harness POS,POS,POS,FUSE --pos-feeder POS --neg-feeder NEG \
       --awg-main "2/0 AWG" --awg-branch "6 AWG"
 
 输出: out/array_<时间戳>.dxf + .csv(线长清单) + .svg(预览)
@@ -127,7 +128,8 @@ def render_png(sec, path, width=1800):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="光伏阵列 + 线束 自动生成")
     ap.add_argument("--frame", default="", help="外框图 DXF（templates/ 里选）")
-    ap.add_argument("--module", default="PVMODULE", help="组件块名")
+    ap.add_argument("--module", default="",
+                    help="整串用同一个组件块时的块名（老写法；新写法用 --module-first/--module-mid/--module-last）")
     ap.add_argument("--module-first", default="", help="每串第一块（带正极出线），配合 --module-mid/--module-last 用")
     ap.add_argument("--module-mid", default="", help="每串中间块（重复的那个）")
     ap.add_argument("--module-last", default="", help="每串最后一块（带负极出线）")
@@ -144,8 +146,8 @@ def main(argv=None):
                     help="线束整体微调倍率（默认 1.0；支线按接点间距=板子出线点间距，其他块按对角线≈板子）")
     ap.add_argument("--harness", default="", help="线束块链，逗号分隔，可重复")
     ap.add_argument("--gap", type=float, default=40.0, help="线束内块间隔")
-    ap.add_argument("--pos-feeder", default="正极支线", help="线束里哪一块是正极支线（一根对一串）")
-    ap.add_argument("--neg-feeder", default="", help="线束里哪一块是负极支线（没有就留空）")
+    ap.add_argument("--pos-feeder", default="POS", help="线束里哪一块是正极支线（一根对一串）")
+    ap.add_argument("--neg-feeder", default="NEG", help="线束里哪一块是负极支线（自动补齐负极行时用）")
     ap.add_argument("--awg-main", default="", help="主线线号（标在块与块之间的连线上），如 2/0 AWG")
     ap.add_argument("--awg-branch", default="", help="支线线号（只进 CSV/日志，板与板之间不标字），如 6 AWG")
     ap.add_argument("--allow-enlarge", action="store_true", help="允许放大到占满（默认只缩不放）")

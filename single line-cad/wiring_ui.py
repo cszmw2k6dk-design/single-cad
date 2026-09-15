@@ -337,17 +337,19 @@ HTML = r"""<!doctype html>
       <label>负极支线块</label><select id="negfeed"><option value="">（不指定）</option></select>
       <label>主线线号</label><input type="text" id="awgmain" value="2/0 AWG" style="width:100px">
       <label>支线线号</label><input type="text" id="awgbranch" value="6 AWG" style="width:100px">
+      <label><input type="checkbox" id="annot" checked> 线号用 CAD 原生标注(DIMENSION)</label>
       <label>线束缩放</label><input type="number" id="hscale" value="1" step="0.1" min="0.05">
       <label>FUSE间距</label><input type="number" id="fixgap" value="30" step="5">
       <label>起始块</label><input type="text" id="headblk" value="CBX" style="width:70px" title="摆在阵列最左边、与板子固定距离的块">
       <label>起始块间距</label><input type="number" id="headgap" value="60" step="5">
-      <label>负极行旋转</label><input type="number" id="negrot" value="180" step="90"
-             title="负极那一行整体转多少度（180 是把接点朝向翻过来；不对就填 0 或 90）">
-      <label>负极行间距</label><input type="number" id="neggap" value="30" step="5">
+      <label>负极支线旋转</label><input type="number" id="negrot" value="0" step="90"
+             title="负极支线块转多少度：0=正放（插头朝上，和正极行一样，推荐）；180=翻过来挂（块看着是倒的）。公头/母头块不看这个值，自动朝链内">
+      <label>负极行间距</label><input type="number" id="neggap" value="30" step="5"
+             title="负极行和正极行的净空；负极支线块是竖的，程序会自动把它的身子让出来（行线再往下挪一个块高），不会压住正极行">
       <label>末端公头块</label><input type="text" id="posplug" value="Male" style="width:80px"
              title="填了就自动补到链尾、顶最后一串的正极；想让它排在头部就把这里清空、自己放进链里">
       <label>末端母头块</label><input type="text" id="negplug" value="Fmale" style="width:80px"
-             title="填了才会自动生成负极那一行（头部公头 + 中间负极支线 + 末端母头，整体旋转 180°）">
+             title="填了才会自动生成负极那一行（头部公头 + 中间负极支线 + 末端母头）">
       <label><input type="checkbox" id="enlarge"> 允许放大到占满</label>
       <label>保留手工层</label><select id="keepfrom"><option value="">不保留</option></select>
       <label><input type="checkbox" id="tocad"> 直接画到 CAD(COM)</label>
@@ -382,7 +384,7 @@ function setMode(m){
   document.getElementById('arrayRow').style.display=(m==='array')?'flex':'none';
   document.querySelectorAll('.chainOnly').forEach(e=>{e.style.display=(m==='array')?'none':''});
   document.querySelectorAll('h2')[1].textContent=(m==='array')
-    ? '② 线束（点左边块组成线束链，一根正极支线对一串）'
+    ? '② 线束（可以不填：留空自动排“末端母头 + 正极支线×(串数-1) + 末端公头”；想带保险丝等串联块就把块点上来）'
     : '② 链（按顺序摆放并连线）';
 }
 async function loadBlocks(){
@@ -508,9 +510,10 @@ async function gen(){
           match_span:document.getElementById('hspan').checked,
           pos_feeder:document.getElementById('posfeed').value.trim(),
           neg_feeder:document.getElementById('negfeed').value.trim(),
-          awg_main:document.getElementById('awgmain').value.trim(),
-          awg_branch:document.getElementById('awgbranch').value.trim(),
-          allow_enlarge:document.getElementById('enlarge').checked};
+            awg_main:document.getElementById('awgmain').value.trim(),
+            awg_branch:document.getElementById('awgbranch').value.trim(),
+            annot:(document.getElementById('annot')&&document.getElementById('annot').checked)?'dim':'text',
+            allow_enlarge:document.getElementById('enlarge').checked};
     body.keep_from=document.getElementById('keepfrom').value;
     body.to_cad=document.getElementById('tocad').checked;
     body.cad_original=document.getElementById('cadorig').checked;
@@ -608,14 +611,12 @@ class Handler(BaseHTTPRequestHandler):
             for kv in q.split("&"):
                 if kv.startswith("frame="):
                     frame_name = unquote(kv[6:])
+            # 界面里只列**块库**(blocklib/blocks) 里的块。
+            # 以前连外框图模板自带的那一堆老块（防尘塞/L1/T3/CU - AL/lynx 1-4/旧框…）
+            # 也一起列了 —— 它们是画在模板 DXF 里的，删块库文件删不掉，所以看着像
+            # “老块库没删干净”。生成时用到的块由程序自动从块库并进外框图，
+            # 这里的列表只用来挑线束链上的块，不需要把图框自带的块露出来。
             out, in_frame = [], set()
-            if frame_name:
-                fp = os.path.join(FRAMES_DIR, frame_name)
-                for nm in wr.frame_block_names(fp):
-                    in_frame.add(nm)
-                    out.append({"name": nm, "svg": wr.frame_block_svg(fp, nm),
-                                "src": "frame"})
-            # 块库里的块也列出来：生成时会自动把定义补进外框图
             for name in list_blocks():
                 if name in in_frame:
                     continue

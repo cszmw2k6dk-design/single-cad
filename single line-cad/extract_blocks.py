@@ -109,7 +109,7 @@ def main():
                                                   "blocklib", "blocks"))
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--dry", action="store_true")
-    ap.add_argument("--only", default="", help="只抽这些块（逗号分隔，例如 --only 负极支线）")
+    ap.add_argument("--only", default="", help="只抽这些块（逗号分隔，例如 --only NEG）")
     args = ap.parse_args()
 
     sections, blocks, mspace, maxh = scan(args.master)

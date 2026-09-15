@@ -642,8 +642,8 @@ HTML = r"""<!doctype html>
     <button class="edit" onclick="dlg.close()">✕</button></div>
   <div class="dlg-body">
     <div class="row">
-      <div class="fld"><label>块名 (BLOCK)</label><input id="f_block" placeholder="INVERTER"></div>
-      <div class="fld"><label>ID</label><input id="f_id" placeholder="INVERTER"></div>
+      <div class="fld"><label>块名 (BLOCK)</label><input id="f_block" placeholder="POS"></div>
+      <div class="fld"><label>ID</label><input id="f_id" placeholder="POS"></div>
     </div>
     <div class="row">
       <div class="fld"><label>编号前缀</label><input id="f_prefix" placeholder="PCS-"></div>

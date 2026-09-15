@@ -15,7 +15,7 @@ block_check.py -- 块库体检：尺寸 + 接点，看看各块是不是同一�
 
 用法:
   python block_check.py                    # 体检 blocklib/blocks 下所有块
-  python block_check.py --ref PVMODULE     # 指定哪个块当基准（默认 PVMODULE）
+  python block_check.py --ref PV-POS       # 指定哪个块当基准（默认 PV-POS）
   python block_check.py --pitch 3.0        # 手工指定节距 P（默认取基准块的出线点间距）
 """
 
@@ -102,7 +102,7 @@ def ref_pitch(path):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="块库体检")
-    ap.add_argument("--ref", default="PVMODULE", help="基准块（默认 PVMODULE）")
+    ap.add_argument("--ref", default="PV-POS", help="基准块（默认 PV-POS）")
     ap.add_argument("--pitch", type=float, default=0.0, help="手工指定节距 P")
     ap.add_argument("--tol", type=float, default=0.02, help="判定容差（相对值，默认 2%）")
     a = ap.parse_args(argv)

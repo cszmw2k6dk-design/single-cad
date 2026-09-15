@@ -17,6 +17,7 @@ import os
 import sys
 import math
 import re
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import blockui_server as ui
@@ -392,11 +393,14 @@ def _records_bbox(records, blocks):
 
 
 def frame_draw_rect(sec, min_ratio=0.05):
-    """外框图的“画图区”矩形。
+    """外框图的“画图区”矩形 = **内框**（纸边往里那一圈），再扣掉标题栏那一条。
 
-    做法：把外框图 ENTITIES 展平后，取**面积最大的闭合多段线**的包围盒。
-    图框通常就是一个闭合矩形；这样能避开图框块里那些跑到很远的杂线
-    （用整段包围盒当锚点时，内容会被带到框外面去）。
+    以前取的是面积最大的闭合矩形，那是**纸边/外框**：内容会画到内框外面，
+    甚至压到标题栏上（用户要的是“绘图区域不要超过里面的内框”）。现在的口径：
+      1. 面积最大的闭合矩形 = 外框（纸边）；
+      2. 它里面、面积 ≥ 外框 60% 的最大闭合矩形 = 内框（往里那一圈）；
+      3. 内框里“从上到下贯通”的竖线 = 标题栏左边线；“从左到右贯通”的横线 =
+         标题栏上边线。有就把标题栏那一条切掉，只留真正的绘图区。
     找不到闭合矩形时返回 None。
     """
     bmap = _blocks_map(sec)
@@ -404,7 +408,7 @@ def frame_draw_rect(sec, min_ratio=0.05):
     _prim_list(group_entities(sec.get("ENTITIES", [])), bmap,
                (1, 0, 0, 1, 0, 0), 0, prims)
     allbox = _prims_bbox(prims)
-    best = None
+    rects = []
     for p in prims:
         if p[0] != "poly" or len(p) < 3 or not p[2] or len(p[1]) < 4:
             continue
@@ -416,9 +420,237 @@ def frame_draw_rect(sec, min_ratio=0.05):
         if allbox:
             if w * h < (allbox[1] - allbox[0]) * (allbox[3] - allbox[2]) * min_ratio:
                 continue
-        if best is None or w * h > best[0]:
-            best = (w * h, (min(xs), max(xs), min(ys), max(ys)))
-    return best[1] if best else None
+        rects.append((w * h, (min(xs), max(xs), min(ys), max(ys))))
+    if not rects:
+        return None
+    rects.sort(reverse=True)
+    outer = rects[0][1]
+    inner = None
+    for area, bb in rects[1:]:
+        if area < rects[0][0] * 0.6:
+            break
+        if (bb[0] >= outer[0] - 1e-6 and bb[1] <= outer[1] + 1e-6
+                and bb[2] >= outer[2] - 1e-6 and bb[3] <= outer[3] + 1e-6):
+            inner = bb
+            break
+    x0, x1, y0, y1 = inner or outer
+    w, h = x1 - x0, y1 - y0
+    # 标题栏：内框里贯通整高/整宽的边线（取最靠里的那条，宁可留多点白）
+    cut_r = cut_t = None
+    for p in prims:
+        if p[0] != "poly" or len(p) < 2:
+            continue
+        v = p[1]
+        ring = v + ([v[0]] if (len(p) > 2 and p[2]) else [])
+        for a, b in zip(v, ring[1:]):
+            ax, ay = a[0], a[1]
+            bx, by = b[0], b[1]
+            if abs(ax - bx) < 1e-6:                    # 竖线
+                ya, yb = min(ay, by), max(ay, by)
+                if ((yb - ya) >= h * 0.8 and ya >= y0 - 1.0 and yb <= y1 + 1.0
+                        and x0 + w * 0.3 < ax < x1 - 1e-6):
+                    cut_r = ax if cut_r is None else min(cut_r, ax)
+            elif abs(ay - by) < 1e-6:                  # 横线
+                xa, xb = min(ax, bx), max(ax, bx)
+                if ((xb - xa) >= w * 0.8 and xa >= x0 - 1.0 and xb <= x1 + 1.0
+                        and y0 + h * 0.3 < ay < y1 - 1e-6):
+                    cut_t = ay if cut_t is None else max(cut_t, ay)
+    if cut_r is not None:
+        x1 = cut_r
+    if cut_t is not None:
+        y0 = cut_t
+    return (x0, x1, y0, y1)
+
+
+# ================= 线号标注：CAD 原生线性标注（DIMENSION） =================
+# 用户要求：标注要用 CAD 原生的“线性标注”，标注点取块里 CONN-Label 层的点。
+# 原生标注 = DIMENSION 实体 + 它引用的（缓存）块 —— 块里装尺寸界线/尺寸线/箭头/文字。
+# 这里完全照外框模板里 ZWCAD 自己写出来的那份结构生成（模板里的 *D14 就是这个格式）：
+#   DIMENSION：10=尺寸线位置 11=文字中点(= CONN-Label 点) 13/14=两条界线原点
+#              42=实测长度 1=文字覆盖 3=标注样式 50=旋转角 70=128
+#              末尾带 ACAD/DSTYLE xdata：140=文字高 41=箭头大小（这样在 CAD 里
+#              “标注更新/拉伸”之后还是同一副样子）
+#   缓存块  ：2×尺寸界线 + 1×尺寸线 + 2×箭头(SOLID) + 1×MTEXT + 3×DEFPOINTS 点
+
+_DIM_STYLE_PREF = ("SLDDIMSTYLE2", "ISO-25", "Voltage", "Standard")
+
+
+def dim_style_name(sec):
+    """外框里已有的标注样式名，优先项目自己的；一个都没有就返回空串。"""
+    names = []
+    tb = sec.get("TABLES", [])
+    i = 0
+    while i < len(tb):
+        if tb[i] == ("0", "DIMSTYLE"):
+            j, nm = i + 1, ""
+            while j < len(tb) and tb[j][0] != "0":
+                if tb[j][0] == "2" and not nm:
+                    nm = tb[j][1]
+                j += 1
+            if nm:
+                names.append(nm)
+            i = j
+        else:
+            i += 1
+    for p in _DIM_STYLE_PREF:
+        if p in names:
+            return p
+    return names[0] if names else ""
+
+
+def _dim_line(p1, p2, layer="0"):
+    # 记录里必须带 owner(330)：没有的话并进外框后就是“没有属主的实体”，CAD 会判文件无效。
+    # pack 会把它改写成新块记录的句柄。
+    return [("0", "LINE"), ("330", "0"), ("100", "AcDbEntity"), ("8", layer),
+            ("100", "AcDbLine"),
+            ("10", "%.6f" % p1[0]), ("20", "%.6f" % p1[1]), ("30", "0.0"),
+            ("11", "%.6f" % p2[0]), ("21", "%.6f" % p2[1]), ("31", "0.0")]
+
+
+def _dim_solid(tip, base1, base2, layer="0"):
+    """箭头：尖在 tip，底边是 base1-base2（照模板用 SOLID）。"""
+    return [("0", "SOLID"), ("330", "0"), ("100", "AcDbEntity"), ("8", layer),
+            ("100", "AcDbTrace"),
+            ("10", "%.6f" % base1[0]), ("20", "%.6f" % base1[1]), ("30", "0.0"),
+            ("11", "%.6f" % base2[0]), ("21", "%.6f" % base2[1]), ("30", "0.0"),
+            ("12", "%.6f" % tip[0]), ("22", "%.6f" % tip[1]), ("32", "0.0"),
+            ("13", "%.6f" % tip[0]), ("23", "%.6f" % tip[1]), ("33", "0.0")]
+
+
+def _dim_mtext(pos, txt, h, ang, layer="0"):
+    ca, sa = math.cos(ang), math.sin(ang)
+    return [("0", "MTEXT"), ("330", "0"), ("100", "AcDbEntity"), ("8", layer),
+            ("100", "AcDbMText"),
+            ("10", "%.6f" % pos[0]), ("20", "%.6f" % pos[1]), ("30", "0.0"),
+            ("40", "%.4f" % h), ("41", "0.0"), ("46", "0.0"),
+            ("71", "5"), ("72", "1"), ("1", txt),
+            ("11", "%.6f" % ca), ("21", "%.6f" % sa), ("31", "0.0"),
+            ("73", "1"), ("44", "1.0")]
+
+
+def _dim_points(pts, layer="DEFPOINTS"):
+    out = []
+    for x, y in pts:
+        out += [("0", "POINT"), ("330", "0"), ("100", "AcDbEntity"), ("8", layer),
+                ("100", "AcDbPoint"), ("10", "%.6f" % x), ("20", "%.6f" % y), ("30", "0.0")]
+    return out
+
+
+def dim_geom(a, b, anchor, txt, th):
+    """一条“对齐线性标注”的图元（块内容，用图纸坐标）。
+
+    a / b   = 这条线上两个接点（尺寸界线的原点）
+    anchor  = 块里 CONN-Label 层的点（尺寸线过它，文字压在它旁边）
+    返回 (实体对列表, 几何)，线段长度为 0 时返回 (None, None)。
+    """
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    L = math.hypot(dx, dy)
+    if L < 1e-6:
+        return None, None
+    ux, uy = dx / L, dy / L
+    nx, ny = -uy, ux
+    asz = th * 0.83                                  # 箭头长（照模板 6.0 字 : 5.0 箭头）
+    exo = th * 0.10                                  # 界线起点离原点的距离
+    exe = th * 0.21                                  # 界线超出尺寸线的长度
+    d = (anchor[0] - a[0]) * nx + (anchor[1] - a[1]) * ny     # 尺寸线相对线段的偏移
+    sgn = 1.0 if d >= 0 else -1.0
+    if abs(d) < th:                       # 锚点几乎落在导线上：尺寸线让开一点，
+        # 否则尺寸线会和导线重合、看不出是标注；完全在导线上时往**下**让（上面是阵列）
+        d = (-1.0 if ny > 0 else 1.0) * th * 1.4 if abs(d) < 1e-9 else sgn * th * 1.4
+    A = (a[0] + nx * d, a[1] + ny * d)
+    B = (b[0] + nx * d, b[1] + ny * d)
+    nxs, nys = nx * sgn, ny * sgn
+    ents = []
+    for (ox, oy), (px, py) in ((a, A), (b, B)):      # 两条尺寸界线
+        ents.append(_dim_line((ox + nxs * exo, oy + nys * exo),
+                              (px + nxs * exe, py + nys * exe)))
+    ents.append(_dim_line((A[0] + ux * asz, A[1] + uy * asz),
+                          (B[0] - ux * asz, B[1] - uy * asz)))   # 尺寸线
+    hw = asz / 3.0
+    ents.append(_dim_solid(A, (A[0] + ux * asz - uy * hw, A[1] + uy * asz + ux * hw),
+                           (A[0] + ux * asz + uy * hw, A[1] + uy * asz - ux * hw)))
+    ents.append(_dim_solid(B, (B[0] - ux * asz - uy * hw, B[1] - uy * asz + ux * hw),
+                           (B[0] - ux * asz + uy * hw, B[1] - uy * asz - ux * hw)))
+    tpos = (anchor[0] + nxs * th * 0.62, anchor[1] + nys * th * 0.62)
+    ents.append(_dim_mtext(tpos, txt, th, math.atan2(uy, ux)))    # 文字
+    ents.append(_dim_points([a, b, A]))                           # 定义点
+    return ents, {"A": A, "B": B, "len": L, "ang": math.degrees(math.atan2(uy, ux)),
+                  "asz": asz}
+
+
+def dim_entity_pairs(name, style, a, b, anchor, txt, g, th):
+    """DIMENSION 实体（对齐线性标注），字段顺序照 ZWCAD 写出来的那份。"""
+    return [("0", "DIMENSION"), ("100", "AcDbEntity"), ("8", "WIRE_LABEL"),
+            ("100", "AcDbDimension"), ("280", "0"),
+            ("2", name),
+            ("10", "%.6f" % g["A"][0]), ("20", "%.6f" % g["A"][1]), ("30", "0.0"),
+            ("11", "%.6f" % anchor[0]), ("21", "%.6f" % anchor[1]), ("31", "0.0"),
+            ("12", "0.0"), ("22", "0.0"), ("32", "0.0"),
+            ("70", "128"),
+            ("1", txt), ("71", "5"), ("42", "%.6f" % g["len"]),
+            ("73", "0"), ("74", "0"), ("75", "0"),
+            ("3", style),
+            ("100", "AcDbAlignedDimension"),
+            ("13", "%.6f" % a[0]), ("23", "%.6f" % a[1]), ("33", "0.0"),
+            ("14", "%.6f" % b[0]), ("24", "%.6f" % b[1]), ("34", "0.0"),
+            ("50", "%.4f" % g["ang"]),
+            ("100", "AcDbRotatedDimension"),
+            ("1001", "ACAD"), ("1000", "DSTYLE"), ("1002", "{"),
+            ("1070", "140"), ("1040", "%.4f" % th),
+            ("1070", "41"), ("1040", "%.4f" % g["asz"]),
+            ("1002", "}")]
+
+
+def dim_block_file(name, ent_records, path):
+    """把标注块内容写成一个“块库式”小 DXF（交给 blockpack.pack_into 并进外框）。
+
+    文件名 = 块名；ENTITIES 段 = 块内容；顺带把 WIRE_LABEL 图层定义带上，
+    这样外框里没有这个层时也会被补出来（标注实体本身就在这个层上）。
+    """
+    out = []
+
+    def sec(nm, body):
+        out.append(("0", "SECTION"))
+        out.append(("2", nm))
+        out.extend(body)
+        out.append(("0", "ENDSEC"))
+
+    # 图层记录必须是 R2000+ 的完整写法：句柄/owner + 两条 100 子类标记 + 名字。
+    # 少写 330 或 100（或者把 2 放到 100 前面）→ CAD 判“无效或不完整的 DXF 输入”，
+    # 整张图被放弃。这里照外框图里自带图层记录的格式写。
+    sec("TABLES", [("0", "TABLE"), ("2", "LAYER"), ("70", "1"),
+                   ("0", "LAYER"), ("5", "1"), ("330", "0"),
+                   ("100", "AcDbSymbolTableRecord"), ("100", "AcDbLayerTableRecord"),
+                   ("2", "WIRE_LABEL"), ("70", "0"),
+                   ("62", "7"), ("6", "Continuous"),
+                   ("0", "ENDTAB")])
+    sec("ENTITIES", [p for rec in ent_records for p in rec])
+    out.append(("0", "EOF"))
+    with open(path, "wb") as f:
+        f.write("".join("%s\r\n%s\r\n" % (c, v) for c, v in out).encode("utf-8"))
+    return path
+
+
+def renumber_handles(data, handle):
+    """把这段实体里的句柄(5)整体换一段新的（返回 bytes，并把 handle[0] 推到后面）。
+
+    用在哪：我们自己画的实体和“后并进来的标注块”都从外框原最大句柄往上发号，
+    不挪一段就会撞句柄（CAD 里会报重复句柄/实体错乱）。
+    """
+    out = bytearray()
+    prev = 0
+    for g in bp.iter_groups(data):
+        start, vstart, vend, end, code, _val = g
+        out += data[prev:start]
+        if code == b"5":
+            newv = ("%X" % handle[0]).encode("ascii")
+            handle[0] += 1
+            out += data[start:vstart] + newv + data[vend:end]
+        else:
+            out += data[start:end]
+        prev = end
+    out += data[prev:]
+    return bytes(out)
 
 
 def _content_bbox(insts, places, scales):
@@ -674,7 +906,13 @@ def _block_insts(bmap, names, log=None):
         prims = []
         _prim_list(recs, bmap, (1, 0, 0, 1, 0, 0), 0, prims)
         # 递归进子块拿接点：抽出来的块，接点在子块里（顶层只有一个 INSERT）
-        pts = [(x, y) for x, y, _lay in _conn_points(recs, bmap)]
+        # CONN-Label 层的点是“线号标注落点”，不是接线点：混在接点里会被当成块最外侧
+        # 那一列接点（Male 的标签在右、Fmale 的在左），于是连线画到标签上、公头母头
+        # 也对着标签摆（负极行偏 9 个单位的根源）。
+        _conn = _conn_points(recs, bmap)
+        pts = [(x, y) for x, y, lay in _conn if "LABEL" not in (lay or "").upper()]
+        if not pts:
+            pts = [(x, y) for x, y, _lay in _conn]     # 只有标签点的块：退回老口径
         if not pts:
             bb = _prims_bbox(prims)
             if bb:
@@ -1014,12 +1252,35 @@ def build_array_frame(frame, spec, log=None, progress=None):
     neg_auto = True if neg_auto is None else bool(neg_auto)  # 负极那一行按正极自动生成
     neg_gap  = _n("neg_gap", 30.0)                           # 负极行到正极行的距离
     neg_head = (spec.get("neg_head") or "").strip()          # 负极行最左边那块（公头）
-    neg_rot  = _n("neg_rotate", 180.0)                       # 负极行的块统一旋转多少度
+    # 负极支线块的朝向：0 = 正放（插头朝上、接点朝下落在负极行线上，和正极行一样）；
+    # 180 = 翻过来挂（块会是倒的）。公头/母头不看这个值，自动朝链内。
+    neg_rot  = _n("neg_rotate", 0.0)
     pos_plug = (spec.get("pos_plug") or "").strip()         # 最右边那根支线的正极上插什么块（公头）
     neg_plug = (spec.get("neg_plug") or "").strip()         # 最右边那串的负极上插什么块（母头）
     keep_from   = (spec.get("keep_from") or "").strip()     # 手工内容（HAND_ 层）从哪搬
     keep_prefix = (spec.get("keep_prefix") or "HAND").strip()
     harness  = [n for n in (spec.get("harness") or []) if n]
+    _pos_feed = (spec.get("pos_feeder") or "").strip()
+    # ---- 线束链不填（或填得不够）也能生成 ----
+    #   没填链：自动排一条最基本的正极行 = 末端母头 + 正极支线×(串数-1) + 末端公头
+    #   （负极行本来就是自动补的；FUSE 这类串联块想加就自己在链里加）
+    if not harness:
+        _auto = [x for x in (neg_plug or pos_plug,
+                             *([_pos_feed] * max(0, n_str - 1)),
+                             pos_plug) if x]
+        if _auto:
+            harness = _auto
+            log.append("线束链没填：自动生成 " + "→".join(_auto))
+    #   填了链但正极支线不够根数：把“正极支线块”补到够（每串一根，末端公头顶最后一串）
+    if _pos_feed:
+        _nf = sum(1 for x in harness if x in (_pos_feed, pos_plug))
+        _plus = 1 if (pos_plug and pos_plug not in harness) else 0   # 公头后面会补到链尾
+        _need = n_str - _plus
+        if _nf < _need:
+            _at = next((i for i, x in enumerate(harness)
+                        if x in (_pos_feed, pos_plug)), len(harness))
+            harness[_at:_at] = [_pos_feed] * (_need - _nf)
+            log.append("正极支线 %d 根、串数 %d：自动补到 %d 根" % (_nf, n_str, _need))
     # 公头/母头是线束那一排的一员（和正极支线同一条水平线），不是插在串的正极旁边。
     # 用户没把它们放进链里的话，这里补到链尾。
     # 末端公头补到链尾；末端母头交给“负极行自动生成”那段处理，
@@ -1033,19 +1294,22 @@ def build_array_frame(frame, spec, log=None, progress=None):
     gap      = _n("gap", 40.0)
     pos_feed = (spec.get("pos_feeder") or "").strip()
     neg_feed = (spec.get("neg_feeder") or "").strip()
-    # 负极行自动生成：和正极那一行**反着来** —— 头部（最左）是公头，最后（最右）是母头。
-    #   正极行：支线×(串数-1) + 末端公头
-    #   负极行：公头 + 负极支线×(串数-2) + 末端母头
-    # 负极行的块整体旋转 180°（接点朝向翻过来）。必须放在 _block_insts 之前补。
+    # 负极行自动生成（和正极那一行对称）：
+    #   正极行：头部接头（对齐 CBX） + 正极支线×(串数-1) + 末端公头
+    #   负极行：头部接头（对齐 CBX） + 负极支线×(串数-1) + 末端母头
+    # 关键在于**头部接头不占板子**：以前头部那根公头是钉在第 1 串的负极上的，
+    # 于是第 1 串负极端子下面是公头、不是负极支线（用户要的是每串都有负极支线）。
+    # 必须放在 _block_insts 之前补。
     neg_from = None
     if neg_auto and (neg_feed or neg_plug or neg_head) and n_str >= 1:
         _head = neg_head or pos_plug or neg_plug
         _mid  = neg_feed or neg_plug or _head
         _tail = neg_plug or neg_feed or _head
         if n_str == 1:
-            neg_seq = [_tail]
+            _pins = [_tail]
         else:
-            neg_seq = [_head] + [_mid] * max(0, n_str - 2) + [_tail]
+            _pins = [_mid] * (n_str - 1) + [_tail]
+        neg_seq = [_head] + _pins if _head else list(_pins)
         neg_seq = [x for x in neg_seq if x]
         if neg_seq:
             neg_from = len(harness)
@@ -1134,7 +1398,8 @@ def build_array_frame(frame, spec, log=None, progress=None):
     # 支线块名字填错时不能让支线“掉队”（会被当成普通块串在中间）：
     # 在排版之前就退回用链里第一个块当支线，仍然按各串 CONNPOS 从左往右钉。
     _chain = [it["name"] for it in hinsts]
-    if pos_feed and pos_feed not in _chain:
+    # 链里一根正极支线都没有（也没公头顶着）时才算“填错名”，否则不用兜底
+    if pos_feed and pos_feed not in _chain and not (pos_plug and pos_plug in _chain):
         if _chain:
             log.append("⚠ “正极支线块”填的 %s 不在线束链里（链里是 %s）："
                        "暂时改用链里第一个块 %s 当正极支线（按各串 CONNPOS 从左往右钉）"
@@ -1174,43 +1439,65 @@ def build_array_frame(frame, spec, log=None, progress=None):
             for it0 in hinsts:
                 if it0["name"] == head_blk:
                     b0 = cl.bbox(it0["prims"])
-                    w0 = (b0[1] - b0[0]) * 1.0
+                    w0 = (b0[1] - b0[0]) * scales[hinsts.index(it0)]
                     head_x0 = abox[0] - head_gap - w0 / 2.0
                     break
         prev_outs = None
         prev_name = None
         # 链里第一个“支线”出现的位置：它前面的不钉位块算“头部”（排左边），
         # 它后面的不钉位块算“末端”（接在最后一块右边）→ 一条链 = 头 … 支线 … 尾
-        _fi = [i for i, it in enumerate(hinsts)
-               if it["name"] in pos_names or it["name"] in neg_names]
+        # 只看**正极支线**：公头/母头（接头块）不算支线，否则链首那个接头会被当成
+        # “第一根支线”钉到板子端子上（正极行的头块会跑到第 1 串负极下面去）。
+        _fi = [i for i, it in enumerate(hinsts) if it["name"] in pos_names]
         first_feed = _fi[0] if _fi else len(hinsts)
-        # 负极那一行整体往下挪：正极行里最高的块 + neg_gap
+        # 负极那一行整体往下挪：正极行里最高的块 + neg_gap（只在拿不到正极行实际位置时兜底）
         _ph = [(cl.bbox(it["prims"])[3] - cl.bbox(it["prims"])[2]) * scales[i]
                for i, it in enumerate(hinsts) if it["name"] in pos_names]
         neg_dy = (max(_ph) if _ph else 0.0) + neg_gap
+        # 正极行到底排在哪一行，得边排边量：正极行的 y 由链首（CBX→FUSE→支线）那串
+        # 接点对齐算出来，光看“支线块的高度”是估不准的。以前用高度当代理，头部块一进链
+        # 就差 30~40 个单位，负极行直接被排到正极行**上面**去了（两行叠在一起）。
+        # pos_bottom = 正极行里最低的那一点（块底和接点取更低者），负极行的行线照它往下 neg_gap。
+        pos_bottom = None
         neg_row_y = None          # 负极行整排共用的 y（首块定下来，后面都跟它）
-        # 起始块（CBX）要摆在**整排最左边**：先把头部那一排（FUSE 那类）从 head_x0
-        # 往右排一遍，量出它们最左边的 x，CBX 的右边界就贴在这条线左边 head_gap 处。
-        head_leftmost = None
-        if head_blk:
-            _hr = None
-            _pn0 = None
-            for _i0, it0 in enumerate(hinsts):
-                if it0["name"] == head_blk:
-                    continue
-                if (it0["name"] in pos_names) or (it0["name"] in neg_names):
-                    break                      # 到支线了，头部这一排结束
-                b0 = cl.bbox(it0["prims"])
-                s0 = scales[_i0]
-                cw0 = (b0[0] + b0[1]) / 2.0 * s0
-                bw0 = b0[1] * s0
-                g0 = fix_gap if ((it0["name"] in fix_gnames) or (_pn0 in fix_gnames)) else gap
-                cx0 = ((head_x0 if head_x0 is not None else abox[0] + cw0)
-                       if _hr is None else (_hr + g0 + cw0))
-                _hr = cx0 + bw0
-                _lo = cx0 - cw0 + b0[0] * s0
-                head_leftmost = _lo if head_leftmost is None else min(head_leftmost, _lo)
-                _pn0 = it0["name"]
+        # ---- 负极行每块的朝向 ----
+        #  · 竖着的“支线块”（NEG 这类：接点在块的一头、身子是竖的）**正着放**，
+        #    和正极行一样：插头朝上、接点朝下落在负极行线上。以前整行硬转 180°，
+        #    画出来就是“负极支线倒过来”（测试里看到的那张）。要那副样子，
+        #    把界面的“负极行旋转”填 180 就行。
+        #  · 横着的“接头块”（公头/母头：接点只在一侧、身子是横的）自动转到
+        #    **接点朝链内、身子朝外**，不管它排在链首还是链尾（Male 在链首→180°，
+        #    Fmale 在链尾→180°；反过来摆也能自己认）。
+        neg_rot_by, neg_above = {}, {}   # idx -> 实际旋转角度 / 该块伸出负极行线以上的高度
+        if neg_from is not None:
+            for _i in range(neg_from, len(hinsts)):
+                _it = hinsts[_i]
+                _b = cl.bbox(_it["prims"])
+                _s = scales[_i]
+                _R = [(x * _s, y * _s) for x, y in
+                      cl.side_ports(_it["prims"], _it["pts"], "right")]
+                _L = [(x * _s, y * _s) for x, y in
+                      cl.side_ports(_it["prims"], _it["pts"], "left")]
+                _rot = neg_rot
+                _pw, _ph2 = (_b[1] - _b[0]) * _s, (_b[3] - _b[2]) * _s
+                _pins = _R + _L
+                _pxs = [p[0] for p in _pins]
+                if _pins and _pw > _ph2 and (max(_pxs) - min(_pxs)) < max(0.5, _pw * 0.1):
+                    # 单侧接点的横块 = 接头：接点要朝链内（首块朝右、其余朝左）
+                    _pin_right = ((min(_pxs) + max(_pxs)) / 2.0) > (_b[0] + _b[1]) / 2.0 * _s
+                    _rot = 0.0 if _pin_right == (_i == neg_from) else 180.0
+                # 这块“伸出负极行线以上”多少：行线按它往下让，免得压住正极行
+                _top = (-_b[2] * _s) if _rot else (_b[3] * _s)
+                _ab = 0.0
+                for _c in (_R, _L):
+                    if not _c:
+                        continue
+                    _mid = sum(p[1] for p in _c) / len(_c)
+                    if _rot:
+                        _mid = -_mid
+                    _ab = max(_ab, _top - _mid)
+                neg_rot_by[_i] = _rot
+                neg_above[_i] = _ab
         for idx, it in enumerate(hinsts):
             b = cl.bbox(it["prims"])
             s = scales[idx]
@@ -1219,8 +1506,9 @@ def build_array_frame(frame, spec, log=None, progress=None):
             r = [(x * s, y * s) for x, y in cl.side_ports(it["prims"], it["pts"], "right")]
             l = [(x * s, y * s) for x, y in cl.side_ports(it["prims"], it["pts"], "left")]
             is_neg = (neg_from is not None and idx >= neg_from)
-            if is_neg:
-                # 负极行整体转 neg_rot（180°）：局部坐标 (x,y) -> (-x,-y)
+            _rot = neg_rot_by.get(idx, 0.0) if is_neg else 0.0
+            if is_neg and _rot:
+                # 这块转 180°：局部坐标 (x,y) -> (-x,-y)
                 r = [(-x, -y) for x, y in r]
                 l = [(-x, -y) for x, y in l]
                 cw = -cw
@@ -1228,29 +1516,44 @@ def build_array_frame(frame, spec, log=None, progress=None):
             # 横向：支线把“接点”对准板子的出线点（不是把块中心对过去）；
             #       正极支线对左接点，负极支线对右接点；其余的接着上一块排。
             if is_neg:
-                # 负极行：第 k 块钉在第 k 串的负极出线点正下方。
+                # 负极行：**头部接头**（第 1 块）对齐 CBX —— 和正极行的头部同一个横坐标，
+                # 只是排在下面那一行；其余每块钉在第 k 串的负极出线点正下方
+                # （第 1 串下面就是负极支线，不再是公头）。
                 # 块里标了 CONNNEG 就用**那个接点**去对（和正极用 CONNPOS 一个道理）；
                 # 没标就退回用块中心。
                 _k = idx - neg_from
-                cx = nx[_k] if _k < len(nx) else (nx[-1] if nx else abox[0])
+                if _k == 0:
+                    cx = head_x0 if head_x0 is not None else (nx[0] if nx else abox[0])
+                else:
+                    _j = _k - 1
+                    cx = nx[_j] if _j < len(nx) else (nx[-1] if nx else abox[0])
                 _nn = [(x, y) for x, y, _ly in _conn_points(bmap.get(it["name"], []), bmap)
                        if "NEG" in (_ly or "").upper()]
-                if _nn:
-                    px0, py0 = _nn[0]
-                    pxx = cx - (-px0) * s          # 转了 neg_rot 之后接点跑到 -x
-                else:
+                if _k == 0:
+                    # 头部接头不钉板子：按**块中心**对齐 CBX。正极行的头部块也是中心对齐，
+                    # 这样两个头部的中心才在同一条竖线上（下面才算插针）
                     pxx = cx - cw
+                elif _nn:
+                    px0, py0 = _nn[0]
+                    # 转过 180° 的块，接点在图上跑到 -x
+                    pxx = cx - ((-px0) if _rot else px0) * s
+                else:
+                    # 没有 CONNNEG 点的块（公头 Male / 母头 Fmale）以前按“块中心”对，
+                    # 可它们的块中心离接点 9~11 个单位，插针就落在出线点旁边。
+                    # 改成按**接点竖列的中线**对：只有一列的块（公头/母头）接点正好压在
+                    # 出线点正下方；左右对称的块（NEG）中线≈块中心，位置和以前一样。
+                    _xs = [p1[0] for p1 in (l + r)]
+                    _off = ((min(_xs) + max(_xs)) / 2.0) if _xs else cw
+                    pxx = cx - _off
             # 正极支线 + 末端公头都算“正极那一路”：第 k 个钉在第 k 串出线点的正下方
             elif it["name"] in pos_names and kp < len(px) and l:
                 pxx = px[kp] - l[0][0]; kp += 1
-            elif it["name"] in neg_names and kn < len(nx) and r:
+            elif it["name"] in neg_names and neg_from is None and kn < len(nx) and r:
                 pxx = nx[kn] - r[0][0]; kn += 1
             elif head_blk and it["name"] == head_blk:
-                # 摆在**整排最左边**：右边界贴在线束最左侧（含 FUSE 那排）再往左 head_gap 处。
-                # （以前是贴阵列左边缘，结果 FUSE 比它还靠左，看着“头部不在最左边”。）
-                _edge = (head_leftmost if head_leftmost is not None
-                         else (abox[0] + cw))
-                pxx = _edge - head_gap - bw
+                # 起始块（CBX）摆在阵列左边 head_gap 处；它的中心 x = head_x0，
+                # 正极行的头部块和负极行的头部块都对齐这个 x（上下一条竖线，互不重叠）。
+                pxx = (head_x0 if head_x0 is not None else abox[0]) - cw
             elif idx > first_feed:
                 # 支线**之后**的块（末端接头之类）：接着最后一块往右排 → 落在最右边
                 g = fix_gap if ((it["name"] in fix_gnames) or (prev_name in fix_gnames)) else gap
@@ -1269,20 +1572,32 @@ def build_array_frame(frame, spec, log=None, progress=None):
                 pxx = cx - cw
             if is_neg:
                 # 负极行整排**共一条水平线**：
-                #   每块把自己“朝链内的接点”放到同一条 y 上，行内每根线两端一样高。
+                #   每块把“朝链内那一列的接点中线”放到同一条 y 上，行内每根线两端一样高。
                 # （以前每块各自按上一块接点算，Male 的接点在块局部 ±2、NEG 的插头在
                 #   ±72，差 70 个单位，于是蓝线是斜的，看着像整排“倒过来”。）
-                # 行线高度 = 首块接点落到 -neg_dy（阵列下沿再往下 neg_dy）。
-                _row = max(l + r, key=lambda p1: abs(p1[1])) if (l or r) else None
+                # 锚点必须是同一种点：Male/Fmale 的接点在插入点两侧、NEG 的接点在块的一头，
+                # 取“离插入点最远的那个接点”当锚，公头/母头就比 NEG 高出一格接点间距，
+                # 两端的线于是斜 3~4 个单位。改成一整列接点的中线就不会错格。
+                # 行线高度 = 正极行最低点再往下 neg_gap（拿不到就用老口径 -neg_dy）。
+                _col = l if idx == neg_from else r        # 首块看“出去”那一列，其余看“进来”那一列
+                if not _col:
+                    _col = l + r
+                _row = (sum(p1[1] for p1 in _col) / len(_col)) if _col else 0.0
                 if neg_row_y is None:
-                    neg_row_y = (-neg_dy) - (_row[1] if _row else 0.0)
-                pyy = neg_row_y - (_row[1] if _row else 0.0)
+                    # 行线 = 正极行最低点 - neg_gap - “负极行里最高那块伸出来的高度”
+                    # （块正放时它有大半个身子在行线以上，得把这段让出来，否则压住正极行）
+                    _ab = max([neg_above.get(_i, 0.0)
+                               for _i in range(neg_from, len(hinsts))] or [0.0])
+                    neg_row_y = ((pos_bottom - neg_gap - _ab) if pos_bottom is not None
+                                 else -neg_dy)
+                pyy = neg_row_y - _row
             elif head_blk and it["name"] == head_blk:
                 # 它跟板子同一水平线（块中心对齐阵列那一行的中线），不是挂在线束行上
                 pyy = -(b[2] + b[3]) / 2.0 * s
-            elif it["name"] in neg_names:
-                # 负极那一行：挂在正极行下面（顶边对齐，便于成排）
-                pyy = -b[3] * s - neg_dy
+            elif it["name"] in neg_names and neg_from is None:
+                # 负极那一行（负极端子直接放进链里、没自动补齐的情况）：顶边挂在同一条行线上
+                pyy = ((pos_bottom - neg_gap - max(neg_above.values() or [0.0]))
+                       if pos_bottom is not None else -neg_dy) - b[3] * s
             elif prev_outs is None:
                 pyy = -b[3] * s                 # 第一块：顶边挂在 y=0（阵列下沿）
             else:
@@ -1290,12 +1605,19 @@ def build_array_frame(frame, spec, log=None, progress=None):
                 pr = _match_pairs(prev_outs, [(x + pxx, y) for x, y in l])
                 offs = sorted(prev_outs[i][1] - l[j][1] for (i, j) in pr)
                 pyy = offs[len(offs) // 2] if offs else (-b[3] * s)
+            if (not is_neg) and not (head_blk and it["name"] == head_blk):
+                # 记下正极行最低的那一点（块底 vs 接点，取更低者）：负极行照它往下排
+                _low = min([pyy + b[2] * s] + [pyy + p1[1] for p1 in (l + r)])
+                pos_bottom = _low if pos_bottom is None else min(pos_bottom, _low)
             P = (pxx, pyy)
             places.append({"P": P, "s": s,
                            "bb": b, "name": it["name"],
-                           "rot": (neg_rot if is_neg else 0.0),
-                           "outs": [(x + P[0], y + P[1]) for x, y in r],
-                           "lins": [(x + P[0], y + P[1]) for x, y in l],
+                           "rot": _rot,
+                           # 转过的负极端（180°）：块局部的“左列”在图上跑到右边，
+                           # 所以进线/出线要对调，线才接在**朝链内**的那一侧接点上
+                           # （不换的话线会从块的外侧兜过来、压在块身上）。
+                           "outs": [(x + P[0], y + P[1]) for x, y in (l if _rot else r)],
+                           "lins": [(x + P[0], y + P[1]) for x, y in (r if _rot else l)],
                            "right": P[0] + bw})
             prev_outs = places[-1]["outs"]
             right = P[0] + bw
@@ -1303,8 +1625,10 @@ def build_array_frame(frame, spec, log=None, progress=None):
         if kp < n_str and not pos_plug:
             log.append("⚠ 正极支线只有 %d 根、串数 %d：多出来的串没有正极支线"
                        "（把末端公头块填上，它顶一根）" % (kp, n_str))
-        if neg_feed and kn < n_str and not neg_plug:
-            log.append("⚠ 负极支线只有 %d 根、串数 %d" % (kn, n_str))
+        # 负极支线的根数：自动补齐时 = 负极行里钉在板子上的块数（头部的接头不算）
+        _n_neg = ((len(hinsts) - neg_from - 1) if neg_from is not None else kn)
+        if neg_feed and _n_neg < n_str and not neg_plug:
+            log.append("⚠ 负极支线只有 %d 根、串数 %d" % (_n_neg, n_str))
         if match_h:
             log.append("线束缩放: " + ", ".join(
                 "%s x%.3f" % (hinsts[i]["name"], scales[i]) for i in range(len(hinsts)))
@@ -1398,6 +1722,15 @@ def build_array_frame(frame, spec, log=None, progress=None):
         return (p[0] * k + off[0], p[1] * k + off[1])
 
     th = max(0.5, label_r * (fbx[3] - fbx[2])) if fbx else 1.0
+    # ---- 线号标注形式：CAD 原生线性标注（默认） / 老式 TEXT ----
+    _dim_style = dim_style_name(sec)
+    _annot = (spec.get("annot") or "dim").strip().lower()
+    _dim_ok = (_annot != "text") and bool(_dim_style)
+    dim_jobs = []           # [(块名, 块内容实体)]
+    dim_reqs = []           # [(a, b, anchor, txt)] —— 并入失败时退回文字用
+    dim_ent_pairs = []      # DIMENSION 实体的组（句柄等块定义并进来之后再发）
+    if _annot != "text" and not _dim_style:
+        log.append("⚠ 外框图里没有标注样式(DIMSTYLE)，线号退回文字标注")
     cell = {(c["i"], c["s"]): c for c in L["cells"]}
 
     def mod_pts(i, s):
@@ -1453,6 +1786,23 @@ def build_array_frame(frame, spec, log=None, progress=None):
                      ("10", "%.6f" % x), ("20", "%.6f" % y), ("30", "0.0"),
                      ("40", "%.4f" % th), ("1", txt), ("50", "0.0")]:
             content.extend(blk(c, v))
+
+    def emit_dim(a, b, anchor, txt):
+        """CAD 原生“线性标注”：界线原点 = 这条线的两个接点，尺寸线过 CONN-Label 点。
+
+        标注实体先攒在 dim_ents 里，等标注块定义并进外框之后再一起拼进去
+        （块定义没进去的话，CAD 里什么都不显示）。
+        """
+        if not _dim_ok:
+            return False
+        ents, g = dim_geom(a, b, anchor, txt, th)
+        if not g:
+            return False
+        name = "SLDDIM%04d" % (len(dim_jobs) + 1)
+        dim_jobs.append((name, ents))
+        dim_reqs.append((a, b, anchor, txt))
+        dim_ent_pairs.append(dim_entity_pairs(name, _dim_style, a, b, anchor, txt, g, th))
+        return True
 
     def emit_point(x, y, layer):
         """打连接点：POINT 实体放在 CONN_POS / CONN_NEG 层，供后续接线引用。"""
@@ -1526,7 +1876,8 @@ def build_array_frame(frame, spec, log=None, progress=None):
                 nx, ny = -nx, -ny
             mx += nx * th * 1.2
             my += ny * th * 1.2
-        emit_label(mx, my, txt)
+        if not emit_dim(a, b, (mx, my), txt):
+            emit_label(mx, my, txt)
 
     def seg(a, b):
         emit_wire(a, b)
@@ -1554,11 +1905,16 @@ def build_array_frame(frame, spec, log=None, progress=None):
 
     def label_near(a, b, cands, txt):
         """优先用块里 CONN-Label 层的点当标注落点（取离连线中点最近的那个）；
-        没有就退回原来的“中点 + 垂直偏一个字高”。"""
+        没有就退回原来的“中点 + 垂直偏一个字高”。
+        标注形式默认是 CAD 原生线性标注（尺寸界线压在这条线的两个接点上、
+        文字压在 CONN-Label 点上）；标注样式缺失或并入失败才退回 TEXT。"""
         nonlocal n_lab_done
         if cands:
             mx, my = (a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0
             q = min(cands, key=lambda p: (p[0] - mx) ** 2 + (p[1] - my) ** 2)
+            if emit_dim(a, b, q, txt):
+                n_lab_done += 1
+                return
             emit_label(q[0], q[1], txt)
             n_lab_done += 1
             return
@@ -1600,7 +1956,7 @@ def build_array_frame(frame, spec, log=None, progress=None):
     # 名单填错（比如“正极支线”这种库里已经改名/不存在的名字）会让支线钉错位，
     # 甚至让公头被当成第一根支线钉到最左边——这里直接说清楚。
     chain_names = [h["name"] for h in hinsts]
-    if neg_feed and neg_feed not in chain_names:
+    if neg_feed and neg_feed not in chain_names and neg_from is None:
         log.append("⚠ “负极支线块”填的 %s 不在线束链里" % neg_feed)
     if not link:
         log.append("跨接线：按你的要求不画（正极支线不接板子）；需要时打开“阵列↔线束 跨接线”")
@@ -1652,6 +2008,60 @@ def build_array_frame(frame, spec, log=None, progress=None):
                        + ", ".join(sorted(miss)))
     elif keep_from:
         log.append("⚠ 找不到要保留手工内容的文件: %s" % keep_from)
+
+    # ---- 原生标注：先把标注块定义并进外框，成功了才把 DIMENSION 实体拼进去 ----
+    if dim_jobs:
+        _ok, _dlog, _paths = False, [], []
+        try:
+            for _nm, _ents in dim_jobs:
+                _p = os.path.join(tempfile.gettempdir(), _nm + ".dxf")
+                _paths.append(dim_block_file(_nm, _ents, _p))
+            _base_bad = bp.verify(fb)          # 外框图自带的老毛病不算我们的
+            fb2, _info = bp.pack_into(fb, _paths, _dlog)
+            # 标注块要按 CAD 的规矩做成“匿名块”（*SLDDIMxxxx + BLOCK 的 70=1），
+            # 否则有的 CAD 会把 DIMENSION 当普通块引用、标注不显示。
+            # 块名是唯一的，直接在这份字节里定点改名 + 置匿名位；匹配不上就保持原样。
+            for _nm, _ in dim_jobs:
+                _nb = ("*" + _nm).encode("utf-8")
+                fb2 = fb2.replace(_nm.encode("utf-8"), _nb)
+                fb2 = re.sub(rb"(2\r\n" + re.escape(_nb) + rb"\r\n70\r\n)0\r\n",
+                             rb"\g<1>1\r\n", fb2)
+            _pb = [x for x in bp.verify(fb2, ["*" + n for n, _ in dim_jobs])
+                   if x not in _base_bad]
+            if _pb:
+                log.append("⚠ 原生标注块并入后结构检查没过，线号退回文字标注: "
+                           + "; ".join(_pb))
+            else:
+                fb = fb2
+                _ok = True
+        except Exception as _ex:
+            log.append("⚠ 原生标注生成失败(%s)，线号退回文字标注" % _ex)
+        finally:
+            for _p in _paths:
+                try:
+                    os.remove(_p)
+                except OSError:
+                    pass
+        if _ok:
+            # 打包进来的块句柄从“外框原最大句柄+1”开始，我们自己画的实体也用了同一段
+            # 号段 → 会撞。把我们的实体整体挪到打包之后的空档里，再发标注实体。
+            _fib = parse_sections_bytes(fb, "utf-8")[0]
+            handle[0] = max_handle(_fib) + 1
+            content[:] = renumber_handles(bytes(content), handle)
+            for _pairs in dim_ent_pairs:
+                _rec = [("0", "DIMENSION"), ("5", nh()), ("330", mspace or "0")]
+                for _c, _v in _pairs[1:]:             # _pairs[0] 就是 ("0","DIMENSION")
+                    if _c == "2" and str(_v).startswith("SLDDIM"):
+                        _v = "*" + _v                 # 匿名块名（跟并进去的块定义一致）
+                    _rec.append((_c, _v))
+                for _c, _v in _rec:
+                    content.extend(blk(_c, _v))
+            log.append("线号标注: CAD 原生线性标注 %d 个（样式 %s，标注点=CONN-Label）"
+                       % (len(dim_jobs), _dim_style))
+        else:
+            for _a, _b, _anchor, _txt in dim_reqs:      # 退回老式 TEXT 标注
+                emit_label(_anchor[0], _anchor[1], _txt)
+        log.extend([x for x in _dlog if "跳过" in x or "⚠" in x])
 
     out = _splice_entities(fb, content, handle[0])
     if out is None:
@@ -2232,6 +2642,17 @@ def _prim_list(records, blocks, mtx, depth, out):
             child = _matmul(mtx, _matmul(_matmul(T, R), S))
             if nm in blocks:
                 _prim_list(blocks[nm], blocks, child, depth + 1, out)
+            i += 1
+            continue
+        if t == "DIMENSION":
+            # CAD 原生标注：画它引用的那块（块里就是尺寸线/尺寸界线/箭头/文字）。
+            # 预览（界面上的 SVG、导出的 PNG）以前不认 DIMENSION，改完线号标注
+            # 之后预览就“少了一块”——这里补上。
+            nm = _g1(rec, "2")
+            if nm in blocks:
+                px = _gf(rec, "12"); py = _gf(rec, "22")      # 块插入点（一般 0,0）
+                _prim_list(blocks[nm], blocks, _matmul(mtx, (1, 0, 0, 1, px, py)),
+                           depth + 1, out)
             i += 1
             continue
         if t == "LINE":

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-connect_library.py -- 用库里的真实块(正极支线 + FUSE)渲染并连线【保留原始图层】
+connect_library.py -- 用库里的真实块(POS + FUSE)渲染并连线【保留原始图层】
 
 要点：
   - 展平时保留每个实体所在的层(INSERT 内层为 0 的实体继承插入层)
@@ -205,7 +205,7 @@ def cross(dxf, x, y, r=1.2, layer="CONN"):
 
 
 def write_dxf(dxf, base):
-    content = dxf.build({"title": "FUSE + 正极支线"})
+    content = dxf.build({"title": "FUSE + POS"})
     cand = base; i = 0
     while True:
         try:
@@ -220,12 +220,12 @@ def write_dxf(dxf, base):
 
 def main():
     fuse = flatten("FUSE")
-    zj = flatten("正极支线")
+    zj = flatten("POS")
     fc = [(p["x"], p["y"]) for p in ui.capture_points("FUSE")]
-    zc = [(p["x"], p["y"]) for p in ui.capture_points("正极支线")]
-    print("几何: FUSE=%d 正极支线=%d | CONN: FUSE=%d 正极支线=%d"
+    zc = [(p["x"], p["y"]) for p in ui.capture_points("POS")]
+    print("几何: FUSE=%d POS=%d | CONN: FUSE=%d POS=%d"
           % (len(fuse), len(zj), len(fc), len(zc)))
-    print("正极支线图层数:", len(set(p[-1] for p in zj)))
+    print("POS 图层数:", len(set(p[-1] for p in zj)))
 
     fr = side_ports(fuse, fc, "right")
     zl = side_ports(zj, zc, "left")
@@ -233,7 +233,7 @@ def main():
     span_z = zl[0][1] - zl[-1][1]
     s_f = TARGET_SPAN / span_f
     s_z = TARGET_SPAN / span_z
-    print("缩放: FUSE x%.3f  正极支线 x%.3f" % (s_f, s_z))
+    print("缩放: FUSE x%.3f  POS x%.3f" % (s_f, s_z))
 
     fuse2 = scale_prims(fuse, s_f); zj2 = scale_prims(zj, s_z)
     F = [(x*s_f, y*s_f) for x, y in fc]; Z = [(x*s_z, y*s_z) for x, y in zc]
@@ -242,10 +242,10 @@ def main():
     # === 解块插入位置 ===
     # 图纸坐标 = 插入点 + 局部坐标；让 B 的接点落在 A 接点右侧 GAP 处(同高度)
     ref_out = fr2[0]     # FUSE 右上接点(缩放后局部坐标)
-    ref_in = zl2[0]      # 正极支线 左上接点(缩放后局部坐标)
+    ref_in = zl2[0]      # POS 左上接点(缩放后局部坐标)
     P_fuse = (0.0, 0.0)
     P_zj = (ref_out[0] + GAP - ref_in[0], ref_out[1] - ref_in[1])
-    print("块插入位置: FUSE=%s  正极支线=(%.3f, %.3f)" % (P_fuse, P_zj[0], P_zj[1]))
+    print("块插入位置: FUSE=%s  POS=(%.3f, %.3f)" % (P_fuse, P_zj[0], P_zj[1]))
     Fo = P_fuse
     Zo = P_zj
 
@@ -300,3 +300,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

@@ -7,7 +7,7 @@ dxf_info.py -- DXF 体检工具（只读）
   ENTITIES 里的实体类型统计、句柄范围、以及 CONN 层上的连接点。
 
 用法:
-  python dxf_info.py "blocklib/blocks/正极支线.dxf"
+  python dxf_info.py "blocklib/blocks/POS.dxf"
   python dxf_info.py "templates/外框模板(EU) 09072026.dxf" --blocks
 """
 
