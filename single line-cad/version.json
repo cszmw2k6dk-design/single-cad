@@ -1,7 +1,7 @@
 {
-  "version": "20260915.2004",
-  "time": "2026-09-15 20:04:27",
-  "notes": "窗口版修复下载：加保存到桌面/打开文件夹/用ZWCAD打开三个按钮",
-  "commit": "0e2899b",
+  "version": "20260915.2143",
+  "time": "2026-09-15 21:43:40",
+  "notes": "加同步工具 sync_from_github.py（git 端口不通时用 API 对齐远端）",
+  "commit": "cb3f508",
   "url": "https://codeload.github.com/cszmw2k6dk-design/single-cad/zip/refs/heads/main"
 }
