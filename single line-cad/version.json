@@ -1,7 +1,7 @@
 {
-  "version": "20260915.1716",
-  "time": "2026-09-15 17:16:06",
-  "notes": "负极行/支线修正、头部对齐CBX、画图区改内框、线号改CAD原生标注、线束链可自动生成、清理老库块；修复标注块记录不全导致 DXF 无效",
-  "commit": "3bccb2a",
+  "version": "20260915.2004",
+  "time": "2026-09-15 20:04:27",
+  "notes": "窗口版修复下载：加保存到桌面/打开文件夹/用ZWCAD打开三个按钮",
+  "commit": "0e2899b",
   "url": "https://codeload.github.com/cszmw2k6dk-design/single-cad/zip/refs/heads/main"
 }

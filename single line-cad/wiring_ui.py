@@ -261,6 +261,77 @@ def app_version():
     return code_version(), "内置版本"
 
 
+# ----------------------- 桌面窗口里的文件操作 -----------------------
+# 打包成桌面窗口（pywebview）后，界面里的 <a download> 点了没反应 —— WebView2
+# 不会像浏览器那样弹下载框。所以这几件事改由程序自己做：
+#   保存到桌面 / 打开输出文件夹 / 用默认程序打开（DXF 一般直接进 ZWCAD）
+def _desktop_dir():
+    for p in (os.path.join(os.path.expanduser("~"), "Desktop"),
+              os.path.join(os.path.expanduser("~"), "OneDrive", "Desktop"),
+              os.path.expanduser("~")):
+        if os.path.isdir(p):
+            return p
+    return os.path.expanduser("~")
+
+
+def _safe_out_file(name):
+    """只允许碰输出目录里的文件（防目录穿越）。"""
+    p = os.path.join(OUTDIR, os.path.basename(name or ""))
+    return p if os.path.isfile(p) else None
+
+
+def export_file(name, where="desktop"):
+    """把输出文件复制到桌面/下载目录，返回 (ok, 说明或目标路径)。"""
+    src = _safe_out_file(name)
+    if not src:
+        return False, "找不到文件：%s" % name
+    if where == "downloads":
+        dst_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+        if not os.path.isdir(dst_dir):
+            dst_dir = _desktop_dir()
+    else:
+        dst_dir = _desktop_dir()
+    dst = os.path.join(dst_dir, os.path.basename(src))
+    try:
+        i = 1
+        base, ext = os.path.splitext(os.path.basename(src))
+        while os.path.exists(dst):          # 重名就加序号，不覆盖用户已有文件
+            dst = os.path.join(dst_dir, "%s (%d)%s" % (base, i, ext))
+            i += 1
+        import shutil as _sh
+        _sh.copy2(src, dst)
+        return True, dst
+    except Exception as ex:
+        return False, "复制失败：%s: %s" % (type(ex).__name__, ex)
+
+
+def reveal_file(name=""):
+    """在资源管理器里定位输出文件（没给名字就打开输出目录）。"""
+    import subprocess
+    p = _safe_out_file(name) if name else None
+    try:
+        if p:
+            subprocess.Popen(["explorer", "/select,", os.path.normpath(p)])
+        else:
+            os.makedirs(OUTDIR, exist_ok=True)
+            os.startfile(OUTDIR)                      # noqa: S606（Windows 专用）
+        return True, p or OUTDIR
+    except Exception as ex:
+        return False, "%s: %s" % (type(ex).__name__, ex)
+
+
+def open_with_default(name):
+    """用系统默认程序打开输出文件（DXF 通常会直接进 ZWCAD）。"""
+    p = _safe_out_file(name)
+    if not p:
+        return False, "找不到文件：%s" % name
+    try:
+        os.startfile(p)                               # noqa: S606
+        return True, p
+    except Exception as ex:
+        return False, "%s: %s" % (type(ex).__name__, ex)
+
+
 # ----------------------------- HTTP -----------------------------
 HTML = r"""<!doctype html>
 <html lang="zh"><head><meta charset="utf-8">
@@ -292,8 +363,11 @@ HTML = r"""<!doctype html>
  input[type=text],select{padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-size:13px}
  button{background:var(--brand);color:#fff;border:0;border-radius:9px;padding:9px 18px;font-size:14px;cursor:pointer;font-weight:600}
  button.ghost{background:#eef0f4;color:var(--ink);font-weight:500}
- .out{margin-top:12px}
- a.dl{display:inline-block;margin-top:8px;color:var(--brand)}
+.out{margin-top:12px}
+a.dl{display:inline-block;margin-top:8px;color:var(--brand)}
+.dlrow{margin-top:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.dlrow button{padding:6px 14px;font-size:13px}
+.dlrow a.dl{margin-top:0}
  #log{white-space:pre-wrap;font-size:12px;color:var(--muted);margin-top:8px}
 </style></head>
 <body>
@@ -376,6 +450,7 @@ HTML = r"""<!doctype html>
 </div>
 <script>
 let chain=[];
+let lastOut={dxf:'', csv:''};   // 最近一次生成的文件名（桌面窗口的“保存/打开”要用）
 let framesReady=false;
 let lastBlocks=[];      // 块库里所有块名（给“正极/负极支线块”下拉用）
 let mode='chain';
@@ -521,10 +596,37 @@ async function gen(){
   const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const d=await r.json();
   progStop('完成');
+  const dxf=(d.dxf_file||'').split(/[\\/]/).pop();
+  const csv=((d.csv_url||'').split('/').pop());
+  lastOut={dxf:dxf, csv:decodeURIComponent(csv||'')};
   document.getElementById('out').innerHTML =
-    (d.svg||'') + '<div><a class="dl" href="'+d.dxf_url+'" download>下载 DXF</a>' +
-    (d.csv_url?('  <a class="dl" href="'+d.csv_url+'" download>下载线长清单 CSV</a>'):'') + '</div>' +
+    (d.svg||'') +
+    '<div class="dlrow">' +
+      '<button class="ghost" onclick="fileAct(\'open\')">用默认程序打开(DXF)</button> ' +
+      '<button class="ghost" onclick="fileAct(\'export\')">保存到桌面</button> ' +
+      '<button class="ghost" onclick="fileAct(\'reveal\')">打开输出文件夹</button> ' +
+      (d.csv_url?('<button class="ghost" onclick="fileAct(\'export\',lastOut.csv)">线长清单存到桌面</button> '):'') +
+      (d.dxf_url?('<a class="dl" href="'+d.dxf_url+'" download>下载 DXF</a> '):'') +
+      (d.csv_url?('<a class="dl" href="'+d.csv_url+'" download>下载线长清单 CSV</a> '):'') +
+      '<span id="fileMsg" style="font-size:12px;color:var(--muted);margin-left:8px"></span>' +
+    '</div>' +
     '<div id="log">'+(d.log||[]).join('\n')+'</div>';
+}
+// 打包成桌面窗口时，<a download> 点了没反应（WebView2 不弹下载框），
+// 所以窗口里改用程序自己的保存/打开能力；浏览器模式还走原来的下载链接。
+// 注意：pywebview 的 api 是页面加载后异步注入的，所以这里用函数现查，别写成常量
+function inApp(){ return !!(window.pywebview && window.pywebview.api); }
+async function fileAct(act, name){
+  const f = name || lastOut.dxf;
+  const box = document.getElementById('fileMsg');
+  if(!f){ if(box) box.textContent='还没有生成文件'; return; }
+  if(box) box.textContent='处理中…';
+  try{
+    const r = await fetch('/api/file/'+act+'?name='+encodeURIComponent(f));
+    const d = await r.json();
+    if(box) box.textContent = (d.ok? '✓ ' : '✗ ') +
+      (act==='export' ? ('已保存到 ' + d.msg) : (act==='reveal' ? '已在文件夹里定位' : d.msg));
+  }catch(e){ if(box) box.textContent='✗ '+e; }
 }
 loadBlocks();
 setMode('chain');
@@ -597,12 +699,41 @@ class Handler(BaseHTTPRequestHandler):
                  "trace": traceback.format_exc().strip().splitlines()[-3:]}
             ).encode("utf-8"), "application/json")
 
+    def _api_file(self, path):
+        """桌面窗口里的文件操作（浏览器里不需要，浏览器直接下载就行）。
+
+        GET /api/file/export?name=x.dxf&to=desktop|downloads  → 另存到桌面/下载
+        GET /api/file/reveal?name=x.dxf                      → 资源管理器里定位文件
+        GET /api/file/open?name=x.dxf                        → 用默认程序打开（进 CAD）
+        """
+        from urllib.parse import unquote, parse_qs
+        q = parse_qs(path.split("?", 1)[1]) if "?" in path else {}
+        name = unquote((q.get("name") or [""])[0])
+        action = path.split("?", 1)[0].rsplit("/", 1)[-1]
+        try:
+            if action == "export":
+                ok, msg = export_file(name, (q.get("to") or ["desktop"])[0])
+            elif action == "reveal":
+                ok, msg = reveal_file(name)
+            elif action == "open":
+                ok, msg = open_with_default(name)
+            else:
+                ok, msg = False, "不认识的操作：%s" % action
+        except Exception as ex:
+            ok, msg = False, "%s: %s" % (type(ex).__name__, ex)
+        self._send(200, json.dumps({"ok": ok, "msg": str(msg),
+                                    "name": name, "action": action}
+                                   ).encode("utf-8"), "application/json")
+
     def do_GET(self):
         if self.path.startswith("/api/progress"):
             self._send(200, json.dumps(PROGRESS).encode("utf-8"), "application/json")
             return
         if self.path.startswith("/api/update"):
             self._api_update(self.path)
+            return
+        if self.path.startswith("/api/file/"):
+            self._api_file(self.path)
             return
         if self.path.startswith("/api/blocks"):
             from urllib.parse import unquote
@@ -635,7 +766,16 @@ class Handler(BaseHTTPRequestHandler):
             if os.path.exists(p):
                 ct = ("text/csv; charset=utf-8" if fn.lower().endswith(".csv")
                       else "application/dxf")
-                self._send(200, open(p, "rb").read(), ct)
+                # 带上附件头：浏览器模式下点了就直接下载（窗口模式走 /api/file/*）
+                self.send_response(200)
+                self.send_header("Content-Type", ct)
+                self.send_header("Content-Disposition",
+                                 'attachment; filename="%s"' % fn.encode("ascii", "replace").decode())
+                self.send_header("Cache-Control", "no-store")
+                body = open(p, "rb").read()
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
             else:
                 self._send(404, b"not found")
         else:
