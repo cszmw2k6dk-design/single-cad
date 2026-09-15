@@ -1,7 +1,7 @@
 {
-  "version": "20260915.2143",
-  "time": "2026-09-15 21:43:40",
-  "notes": "加同步工具 sync_from_github.py（git 端口不通时用 API 对齐远端）",
-  "commit": "cb3f508",
+  "version": "20260915.2149",
+  "time": "2026-09-15 21:49:25",
+  "notes": "同步工具修正：缺远端对象时不再回退本地；镜像提交带走新文件",
+  "commit": "669b676",
   "url": "https://codeload.github.com/cszmw2k6dk-design/single-cad/zip/refs/heads/main"
 }
