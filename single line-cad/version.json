@@ -1,7 +1,7 @@
 {
-  "version": "20260915.2153",
-  "time": "2026-09-15 21:53:05",
-  "notes": "推送守卫：本地缺远端对象时不再回退本地分支",
-  "commit": "5479326",
+  "version": "20260916.1315",
+  "time": "2026-09-16 13:15:53",
+  "notes": "线号标注默认改回文字标注（原生 DIMENSION 在 ZWCAD 2025 里会被判无效，改为可选）；原生标注按 ZWCAD 写法修正：*D 块名、BLOCK 头 70=1、BLOCK_RECORD 340/0/280/281、样式优先 ISO-25",
+  "commit": "dee92fc",
   "url": "https://codeload.github.com/cszmw2k6dk-design/single-cad/zip/refs/heads/main"
 }

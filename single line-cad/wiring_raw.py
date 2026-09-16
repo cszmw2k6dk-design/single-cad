@@ -472,7 +472,9 @@ def frame_draw_rect(sec, min_ratio=0.05):
 #              “标注更新/拉伸”之后还是同一副样子）
 #   缓存块  ：2×尺寸界线 + 1×尺寸线 + 2×箭头(SOLID) + 1×MTEXT + 3×DEFPOINTS 点
 
-_DIM_STYLE_PREF = ("SLDDIMSTYLE2", "ISO-25", "Voltage", "Standard")
+# 标注样式优先级：ISO-25 是外框模板里 ZWCAD 自己那批标注在用的样式（值也正常）；
+# SLDDIMSTYLE2 那套的值是按别的比例做的（DIMTXT=700），放最后。
+_DIM_STYLE_PREF = ("ISO-25", "Voltage", "SLDDIMSTYLE2", "Standard")
 
 
 def dim_style_name(sec):
@@ -1724,7 +1726,9 @@ def build_array_frame(frame, spec, log=None, progress=None):
     th = max(0.5, label_r * (fbx[3] - fbx[2])) if fbx else 1.0
     # ---- 线号标注形式：CAD 原生线性标注（默认） / 老式 TEXT ----
     _dim_style = dim_style_name(sec)
-    _annot = (spec.get("annot") or "dim").strip().lower()
+    # 默认走**文字标注**：ZWCAD 2025 目前对本程序生成的 DIMENSION 会报
+    # “无效或不完整的 DXF 输入 —— 图形被放弃”，等原生标注那条路验完再打开。
+    _annot = (spec.get("annot") or "text").strip().lower()
     _dim_ok = (_annot != "text") and bool(_dim_style)
     dim_jobs = []           # [(块名, 块内容实体)]
     dim_reqs = []           # [(a, b, anchor, txt)] —— 并入失败时退回文字用
@@ -1798,10 +1802,12 @@ def build_array_frame(frame, spec, log=None, progress=None):
         ents, g = dim_geom(a, b, anchor, txt, th)
         if not g:
             return False
-        name = "SLDDIM%04d" % (len(dim_jobs) + 1)
-        dim_jobs.append((name, ents))
+        idx = len(dim_jobs) + 1
+        temp = "SLDDIM%04d" % idx                     # 临时文件名 = 打包时的块名
+        final = "*D%04d" % (9000 + idx)               # 打包后改成 CAD 自己的匿名标注块名
+        dim_jobs.append((temp, final, ents))
         dim_reqs.append((a, b, anchor, txt))
-        dim_ent_pairs.append(dim_entity_pairs(name, _dim_style, a, b, anchor, txt, g, th))
+        dim_ent_pairs.append(dim_entity_pairs(final, _dim_style, a, b, anchor, txt, g, th))
         return True
 
     def emit_point(x, y, layer):
@@ -2013,20 +2019,26 @@ def build_array_frame(frame, spec, log=None, progress=None):
     if dim_jobs:
         _ok, _dlog, _paths = False, [], []
         try:
-            for _nm, _ents in dim_jobs:
+            for _nm, _fin, _ents in dim_jobs:
                 _p = os.path.join(tempfile.gettempdir(), _nm + ".dxf")
                 _paths.append(dim_block_file(_nm, _ents, _p))
             _base_bad = bp.verify(fb)          # 外框图自带的老毛病不算我们的
             fb2, _info = bp.pack_into(fb, _paths, _dlog)
-            # 标注块要按 CAD 的规矩做成“匿名块”（*SLDDIMxxxx + BLOCK 的 70=1），
-            # 否则有的 CAD 会把 DIMENSION 当普通块引用、标注不显示。
-            # 块名是唯一的，直接在这份字节里定点改名 + 置匿名位；匹配不上就保持原样。
-            for _nm, _ in dim_jobs:
-                _nb = ("*" + _nm).encode("utf-8")
+            # 标注块按 CAD 自己的写法收尾：
+            #   块名 *D<号码>；BLOCK 头 70=1（匿名）；
+            #   BLOCK_RECORD 保持 70=0 并补 340/280/281（ZWCAD 自己写的 *D 块就是这样）。
+            # 名字唯一，直接在这份字节上定点改；匹配不上就保持原样。
+            for _nm, _fin, _ in dim_jobs:
+                _nb = _fin.encode("utf-8")
                 fb2 = fb2.replace(_nm.encode("utf-8"), _nb)
-                fb2 = re.sub(rb"(2\r\n" + re.escape(_nb) + rb"\r\n70\r\n)0\r\n",
-                             rb"\g<1>1\r\n", fb2)
-            _pb = [x for x in bp.verify(fb2, ["*" + n for n, _ in dim_jobs])
+                # BLOCK 头：跟在 70 后面的是 10（基点）→ 只把这一处的 70 改成 1
+                fb2 = re.sub(rb"(2\r\n" + re.escape(_nb) + rb"\r\n70\r\n)0\r\n(10\r\n)",
+                             rb"\g<1>1\r\n\g<2>", fb2)
+                # BLOCK_RECORD：70 后面直接是下一条记录 → 补 340/280/281，70 保持 0
+                fb2 = re.sub(rb"(2\r\n" + re.escape(_nb) + rb"\r\n)70\r\n0\r\n(0\r\n)",
+                             rb"\g<1>340\r\n0\r\n70\r\n0\r\n280\r\n1\r\n281\r\n0\r\n\g<2>",
+                             fb2)
+            _pb = [x for x in bp.verify(fb2, [f for _n, f, _e in dim_jobs])
                    if x not in _base_bad]
             if _pb:
                 log.append("⚠ 原生标注块并入后结构检查没过，线号退回文字标注: "
@@ -2051,8 +2063,6 @@ def build_array_frame(frame, spec, log=None, progress=None):
             for _pairs in dim_ent_pairs:
                 _rec = [("0", "DIMENSION"), ("5", nh()), ("330", mspace or "0")]
                 for _c, _v in _pairs[1:]:             # _pairs[0] 就是 ("0","DIMENSION")
-                    if _c == "2" and str(_v).startswith("SLDDIM"):
-                        _v = "*" + _v                 # 匿名块名（跟并进去的块定义一致）
                     _rec.append((_c, _v))
                 for _c, _v in _rec:
                     content.extend(blk(_c, _v))

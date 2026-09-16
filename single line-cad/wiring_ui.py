@@ -411,7 +411,7 @@ a.dl{display:inline-block;margin-top:8px;color:var(--brand)}
       <label>负极支线块</label><select id="negfeed"><option value="">（不指定）</option></select>
       <label>主线线号</label><input type="text" id="awgmain" value="2/0 AWG" style="width:100px">
       <label>支线线号</label><input type="text" id="awgbranch" value="6 AWG" style="width:100px">
-      <label><input type="checkbox" id="annot" checked> 线号用 CAD 原生标注(DIMENSION)</label>
+      <label><input type="checkbox" id="annot"> 线号用 CAD 原生标注(DIMENSION)</label>
       <label>线束缩放</label><input type="number" id="hscale" value="1" step="0.1" min="0.05">
       <label>FUSE间距</label><input type="number" id="fixgap" value="30" step="5">
       <label>起始块</label><input type="text" id="headblk" value="CBX" style="width:70px" title="摆在阵列最左边、与板子固定距离的块">
