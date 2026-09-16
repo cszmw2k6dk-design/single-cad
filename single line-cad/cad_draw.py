@@ -13,6 +13,7 @@ cad_draw.py -- 把生成好的 DXF 内容“回放”进 CAD（ZWCAD COM 直画�
 都和 AutoCAD 一致。
 """
 
+import math
 import os
 
 import wiring_raw as wr
@@ -344,6 +345,21 @@ def replay(doc, dxf_path, log, only_blocks=None, only_layers=OUR_LAYERS):
             try:
                 d = ms.AddDimAligned(pt(a[0], a[1]), pt(b[0], b[1]),
                                      pt(mid[0] + nx * off, mid[1] + ny * off))
+                # 标注样式：优先用 ISO-25（值正常、非注释性）；注释性样式在小比例下会看不见
+                for _st in ("ISO-25", "Standard"):
+                    try:
+                        d.StyleName = _st
+                        break
+                    except Exception:
+                        pass
+                # 默认文字高/箭头只有 2.5 —— 在 1600 单位的外框图纸上等于看不见。
+                # 按线号字高（从 DXF 的 WIRE_LABEL 文字高读到的 h）给标注文字和箭头定值。
+                try:
+                    d.TextHeight = max(float(h), 1.0)
+                    d.ArrowheadSize = max(float(h) * 0.83, 0.8)
+                except Exception:
+                    pass
+                ensure_layer(doc, "DIM")
                 d.Layer = "DIM"
                 stat["DIM"] += 1
             except Exception as ex:
