@@ -1,7 +1,7 @@
 {
-  "version": "20260916.1357",
-  "time": "2026-09-16 13:57:12",
-  "notes": "标注按用户格式：尺寸界线左右界限取两端块的 CONN-Label 点（不再用导线接点）；样式 Voltage、文字高 8、文字偏移 0.1、文字样式 Voltage、文字颜色蓝；箭头太小才兜底改可见",
-  "commit": "905c84f",
+  "version": "20260916.1502",
+  "time": "2026-09-16 15:02:46",
+  "notes": "界面改版：参照 CAD-MAP 编排器的 QSS（深色 #131415、主色 #0432FA、橙色强调点 #F5A800、卡片/药丸按钮/深色输入框、块卡片配浅色缩略图、日志框 Consolas）",
+  "commit": "8d92ecb",
   "url": "https://codeload.github.com/cszmw2k6dk-design/single-cad/zip/refs/heads/main"
 }

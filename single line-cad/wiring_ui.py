@@ -340,51 +340,86 @@ HTML = r"""<!doctype html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>连线生成器</title>
 <style>
- :root{--bg:#f5f6f8;--card:#fff;--line:#e6e8ee;--ink:#1b1f27;--brand:#1466c8;--muted:#7b8494}
+ /* 配色/控件风格参照用户另一套 CAD-MAP 编排器的 QSS（深色 + 蓝色主色 + 橙色强调点） */
+ :root{--bg:#131415;--card:#17181a;--field:#1f2124;--log:#101113;--line:#2a2c2e;
+       --ink:#DADFE3;--ink2:#B9BEC3;--muted:#727577;--hint:#5c6064;
+       --brand:#0432FA;--brand2:#0a46ff;--accent:#F5A800}
  *{box-sizing:border-box}
- body{margin:0;font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;background:var(--bg);color:var(--ink)}
- header{background:linear-gradient(90deg,#0f3a75,#1466c8);color:#fff;padding:16px 26px}
- header h1{margin:0;font-size:19px}
- header .sub{font-size:13px;opacity:.85;margin-top:4px}
- .wrap{display:grid;grid-template-columns:1fr 1fr;gap:18px;padding:18px 26px}
- .panel{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px}
- .panel h2{margin:0 0 10px;font-size:15px}
- .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;max-height:320px;overflow:auto}
- .bcard{border:1px solid var(--line);border-radius:10px;padding:8px;text-align:center;cursor:pointer}
- .bcard:hover{border-color:var(--brand);box-shadow:0 4px 14px rgba(20,60,120,.12)}
- .bcard .nm{font-size:12px;margin-top:4px}
+ body{margin:0;font-family:"Microsoft YaHei","SimHei","Segoe UI",system-ui,sans-serif;
+      font-size:14px;background:var(--bg);color:var(--ink)}
+ ::-webkit-scrollbar{width:10px;height:10px}
+ ::-webkit-scrollbar-thumb{background:#2a2c2e;border-radius:8px}
+ ::-webkit-scrollbar-track{background:transparent}
+ header{background:var(--bg);border-bottom:1px solid var(--line);padding:14px 24px}
+ header .logo{color:var(--brand);font-size:30px;font-weight:800;letter-spacing:-1px}
+ header h1{margin:0;font-size:17px;font-weight:600}
+ header .sub{font-size:12px;color:var(--muted);margin-top:4px}
+ #verTxt{color:var(--muted);font-size:12px}
+ #updMsg{color:var(--accent);font-size:12px}
+ .wrap{display:grid;grid-template-columns:1.05fr 1fr;gap:16px;padding:16px 24px 8px}
+ .panel{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
+ .panel h2{margin:0 0 12px;font-size:16px;font-weight:600;display:flex;align-items:center;gap:8px}
+ .panel h2::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--accent);
+                   flex:0 0 auto}
+ .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;
+       max-height:330px;overflow:auto}
+ .bcard{background:var(--field);border:1px solid var(--line);border-radius:8px;padding:8px;
+        text-align:center;cursor:pointer;transition:border-color .15s,background .15s}
+ .bcard:hover{border-color:var(--brand);background:rgba(4,50,250,.10)}
+ .bcard .nm{font-size:12px;margin-top:4px;color:var(--ink)}
  .bcard .badge{display:inline-block;margin-left:5px;padding:0 5px;border-radius:8px;
-               font-size:10px;background:#e8f6ec;color:#1e7a41;vertical-align:1px}
- .bcard svg{max-width:100%;height:70px}
- .chain{display:flex;flex-wrap:wrap;gap:8px;min-height:44px;padding:8px;border:1px dashed var(--line);border-radius:10px}
- .chip{background:#eef2fb;color:#2b5ba8;border-radius:20px;padding:5px 12px;font-size:13px;display:flex;gap:8px;align-items:center}
- .chip b{cursor:pointer;color:#c0392b}
+               font-size:10px;background:rgba(4,50,250,.18);color:#9fc0ff;vertical-align:1px}
+ .bcard .thumb{background:#eef1f5;border-radius:6px;padding:4px 2px;display:flex;
+        align-items:center;justify-content:center;height:82px;overflow:hidden}
+ .bcard svg{max-width:100%;max-height:74px}
+ .chain{display:flex;flex-wrap:wrap;gap:8px;min-height:66px;padding:10px;
+        background:var(--log);border:1px dashed var(--line);border-radius:8px}
+ .chain>span{color:var(--hint)!important}
+ .chip{background:rgba(4,50,250,.15);color:#9fc0ff;border:1px solid rgba(4,50,250,.35);
+       border-radius:20px;padding:5px 12px;font-size:13px;display:flex;gap:8px;align-items:center}
+ .chip b{cursor:pointer;color:#ff8a80}
  .row{display:flex;gap:12px;align-items:center;margin-top:12px;flex-wrap:wrap}
  .row label{font-size:13px;color:var(--muted)}
- input[type=number]{width:90px;padding:6px 8px;border:1px solid var(--line);border-radius:8px}
- input[type=text],select{padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-size:13px}
- button{background:var(--brand);color:#fff;border:0;border-radius:9px;padding:9px 18px;font-size:14px;cursor:pointer;font-weight:600}
- button.ghost{background:#eef0f4;color:var(--ink);font-weight:500}
-.out{margin-top:12px}
-a.dl{display:inline-block;margin-top:8px;color:var(--brand)}
-.dlrow{margin-top:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
-.dlrow button{padding:6px 14px;font-size:13px}
-.dlrow a.dl{margin-top:0}
- #log{white-space:pre-wrap;font-size:12px;color:var(--muted);margin-top:8px}
+ input[type=number],input[type=text],select{background:var(--field);border:1px solid var(--line);
+       border-radius:8px;padding:6px 10px;color:var(--ink);font-size:13px;font-family:inherit}
+ input[type=number]{width:90px}
+ input[type=text]:focus,input[type=number]:focus,select:focus{outline:none;border-color:var(--brand)}
+ input[type=checkbox],input[type=radio]{accent-color:var(--brand)}
+ button{background:var(--brand);color:#fff;border:0;border-radius:8px;padding:8px 16px;
+        font-size:14px;cursor:pointer;font-weight:600;font-family:inherit}
+ button:hover{background:var(--brand2)}
+ button.ghost{background:rgba(255,255,255,.06);color:var(--ink);font-weight:500;
+        border:1px solid rgba(255,255,255,.10)}
+ button.ghost:hover{background:rgba(255,255,255,.12)}
+ .out{margin-top:12px}
+ a.dl{display:inline-block;margin-top:8px;color:#9fc0ff}
+ .dlrow{margin-top:10px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+ .dlrow button{padding:6px 14px;font-size:13px}
+ .dlrow a.dl{margin-top:0}
+ #log{white-space:pre-wrap;font-size:12px;color:#a8adb2;margin-top:10px;padding:10px 12px;
+      background:var(--log);border:1px solid var(--line);border-radius:8px;max-height:260px;overflow:auto;
+      font-family:Consolas,"Microsoft YaHei",monospace}
+ #progWrap{background:var(--card);border:1px solid var(--line);border-radius:10px;
+      padding:10px 12px;margin-top:12px}
+ #progTxt{color:var(--ink2)}
+ #progLog{background:var(--log);border:1px solid var(--line);border-radius:8px;color:#a8adb2;
+      font-family:Consolas,"Microsoft YaHei",monospace}
+ .out .dlrow{background:var(--log);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
 </style></head>
 <body>
 <header>
-  <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    <span class="logo">SLD</span>
     <h1 style="flex:0 0 auto">连线生成器</h1>
-    <div style="flex:1 1 320px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <span id="verTxt" style="font-size:13px;opacity:.9">版本 {{VER}}（{{VERNOTE}}）</span>
+    <div style="flex:1 1 320px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end">
+      <span id="verTxt">版本 {{VER}}（{{VERNOTE}}）</span>
       <button class="ghost" id="updBtn" onclick="checkUpdate()"
               style="padding:5px 12px;font-size:13px">检查更新</button>
-      <span id="updMsg" style="font-size:13px;opacity:.95"></span>
+      <span id="updMsg"></span>
     </div>
   </div>
   <div class="sub">选块（可重复）→ 组成链 → 生成连完线的产品
-    · 代码版本 {{VER}}（换过代码要重启这个窗口，否则跑的还是旧代码）</div>
+    · 代码版本 {{VER}}（换过代码要重启窗口，否则跑的还是旧代码）</div>
 </header>
 <div class="wrap">
   <div class="panel"><h2>① 块库（点击加入链）</h2>
@@ -447,15 +482,14 @@ a.dl{display:inline-block;margin-top:8px;color:var(--brand)}
       <button class="ghost" onclick="clearChain()">清空</button>
     </div>
     <div class="out" id="out"></div>
-    <div id="progWrap" style="display:none;margin-top:10px">
-      <div style="height:10px;background:#eef0f4;border-radius:6px;overflow:hidden">
-        <div id="progBar" style="height:100%;width:0%;background:linear-gradient(90deg,#0f3a75,#1466c8);transition:width .25s"></div>
+      <div id="progWrap" style="display:none">
+        <div style="height:8px;background:rgba(255,255,255,.12);border-radius:8px;overflow:hidden">
+          <div id="progBar" style="height:100%;width:0%;background:var(--brand);border-radius:8px;transition:width .25s"></div>
+        </div>
+        <div id="progTxt" style="font-size:13px;margin-top:6px;font-weight:600"></div>
+        <pre id="progLog" style="display:none;margin:8px 0 0;padding:8px 10px;max-height:170px;
+             overflow:auto;font-size:12px;line-height:1.5;white-space:pre-wrap"></pre>
       </div>
-      <div id="progTxt" style="font-size:12px;color:#7b8494;margin-top:5px"></div>
-      <pre id="progLog" style="display:none;margin:8px 0 0;padding:8px 10px;background:#f6f7f9;
-           border:1px solid #e3e6ea;border-radius:6px;max-height:170px;overflow:auto;
-           font-size:12px;line-height:1.5;color:#5a636f;white-space:pre-wrap"></pre>
-    </div>
   </div>
 </div>
 <script>
@@ -500,7 +534,7 @@ async function loadBlocks(){
   d.blocks.forEach(b=>{
     const c=document.createElement('div'); c.className='bcard';
     const badge=(b.src==='lib')?'<span class="badge" title="来自块库，生成时自动并入外框">库</span>':'';
-    c.innerHTML=(b.svg||'')+'<div class="nm">'+b.name+badge+'</div>';
+    c.innerHTML='<div class="thumb">'+(b.svg||'')+'</div>'+'<div class="nm">'+b.name+badge+'</div>';
     c.onclick=()=>{chain.push(b.name); renderChain();};
     g.appendChild(c);
   });
