@@ -1729,10 +1729,13 @@ def build_array_frame(frame, spec, log=None, progress=None):
     # 默认走**文字标注**：ZWCAD 2025 目前对本程序生成的 DIMENSION 会报
     # “无效或不完整的 DXF 输入 —— 图形被放弃”，等原生标注那条路验完再打开。
     _annot = (spec.get("annot") or "text").strip().lower()
+    if _annot not in ("text", "shape", "dim"):
+        _annot = "text"
     _dim_ok = (_annot != "text") and bool(_dim_style)
     dim_jobs = []           # [(块名, 块内容实体)]
     dim_reqs = []           # [(a, b, anchor, txt)] —— 并入失败时退回文字用
     dim_ent_pairs = []      # DIMENSION 实体的组（句柄等块定义并进来之后再发）
+    _n_shape = [0]          # “标注外观”画了多少个
     if _annot != "text" and not _dim_style:
         log.append("⚠ 外框图里没有标注样式(DIMSTYLE)，线号退回文字标注")
     cell = {(c["i"], c["s"]): c for c in L["cells"]}
@@ -1810,6 +1813,36 @@ def build_array_frame(frame, spec, log=None, progress=None):
         dim_ent_pairs.append(dim_entity_pairs(final, _dim_style, a, b, anchor, txt, g, th))
         return True
 
+    def emit_shape(a, b, anchor, txt):
+        """把标注**画成普通实体**：尺寸线 + 两条尺寸界线 + 两个箭头 + 文字。
+
+        外观和线性标注一样，但全是标准 LINE/SOLID/MTEXT —— 不依赖 DIMENSION 实体，
+        在任何 CAD 里都能正常打开（ZWCAD 2025 对 DIMENSION 会判无效，这条是兜底）。
+        代价：不是真标注，不能像标注那样拖动/关联更新，改了要重新生成。
+        """
+        ents, g = dim_geom(a, b, anchor, txt, th)
+        if not g:
+            return False
+        for rec in ents:
+            t = rec[0][1] if rec and rec[0][0] == "0" else ""
+            if t == "POINT":
+                continue           # 定义点只有真标注才需要，画在图上反而碍事
+            content.extend(blk("0", t))
+            content.extend(blk("5", nh()))
+            content.extend(blk("330", mspace or "0"))
+            for c, v in rec[2:]:            # rec[1] 是给块用的 330，这里换成模型空间的
+                content.extend(blk(c, v))
+        _n_shape[0] += 1
+        return True
+
+    def emit_annot(a, b, anchor, txt):
+        """线号标注的三种画法：text=文字（默认）/ shape=标注外观 / dim=原生标注。"""
+        if _annot == "dim":
+            return emit_dim(a, b, anchor, txt)
+        if _annot == "shape":
+            return emit_shape(a, b, anchor, txt)
+        return False
+
     def emit_point(x, y, layer):
         """打连接点：POINT 实体放在 CONN_POS / CONN_NEG 层，供后续接线引用。"""
         for c, v in [("0", "POINT"), ("5", nh()), ("330", mspace or "0"),
@@ -1882,7 +1915,7 @@ def build_array_frame(frame, spec, log=None, progress=None):
                 nx, ny = -nx, -ny
             mx += nx * th * 1.2
             my += ny * th * 1.2
-        if not emit_dim(a, b, (mx, my), txt):
+        if not emit_annot(a, b, (mx, my), txt):
             emit_label(mx, my, txt)
 
     def seg(a, b):
@@ -1918,7 +1951,7 @@ def build_array_frame(frame, spec, log=None, progress=None):
         if cands:
             mx, my = (a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0
             q = min(cands, key=lambda p: (p[0] - mx) ** 2 + (p[1] - my) ** 2)
-            if emit_dim(a, b, q, txt):
+            if emit_annot(a, b, q, txt):
                 n_lab_done += 1
                 return
             emit_label(q[0], q[1], txt)
@@ -2016,6 +2049,9 @@ def build_array_frame(frame, spec, log=None, progress=None):
         log.append("⚠ 找不到要保留手工内容的文件: %s" % keep_from)
 
     # ---- 原生标注：先把标注块定义并进外框，成功了才把 DIMENSION 实体拼进去 ----
+    if _n_shape[0]:
+        log.append("线号标注: 标注外观（尺寸线/尺寸界线/箭头+文字，全是普通实体）%d 个"
+                   % _n_shape[0])
     if dim_jobs:
         _ok, _dlog, _paths = False, [], []
         try:

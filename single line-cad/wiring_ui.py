@@ -411,7 +411,12 @@ a.dl{display:inline-block;margin-top:8px;color:var(--brand)}
       <label>负极支线块</label><select id="negfeed"><option value="">（不指定）</option></select>
       <label>主线线号</label><input type="text" id="awgmain" value="2/0 AWG" style="width:100px">
       <label>支线线号</label><input type="text" id="awgbranch" value="6 AWG" style="width:100px">
-      <label><input type="checkbox" id="annot"> 线号用 CAD 原生标注(DIMENSION)</label>
+      <label>线号标注</label><select id="annot"
+        title="text=普通文字（最稳）；shape=画成标注外观（尺寸线/界线/箭头，普通实体，任何 CAD 都能开）；dim=CAD 原生 DIMENSION（可拖动关联，但 ZWCAD 2025 会判无效）">
+        <option value="text">文字</option>
+        <option value="shape">标注外观（普通实体）</option>
+        <option value="dim">CAD 原生标注(DIMENSION)</option>
+      </select>
       <label>线束缩放</label><input type="number" id="hscale" value="1" step="0.1" min="0.05">
       <label>FUSE间距</label><input type="number" id="fixgap" value="30" step="5">
       <label>起始块</label><input type="text" id="headblk" value="CBX" style="width:70px" title="摆在阵列最左边、与板子固定距离的块">
@@ -587,7 +592,7 @@ async function gen(){
           neg_feeder:document.getElementById('negfeed').value.trim(),
             awg_main:document.getElementById('awgmain').value.trim(),
             awg_branch:document.getElementById('awgbranch').value.trim(),
-            annot:(document.getElementById('annot')&&document.getElementById('annot').checked)?'dim':'text',
+            annot:(document.getElementById('annot')||{}).value||'text',
             allow_enlarge:document.getElementById('enlarge').checked};
     body.keep_from=document.getElementById('keepfrom').value;
     body.to_cad=document.getElementById('tocad').checked;

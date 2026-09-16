@@ -1,7 +1,7 @@
 {
-  "version": "20260916.1315",
-  "time": "2026-09-16 13:15:53",
-  "notes": "线号标注默认改回文字标注（原生 DIMENSION 在 ZWCAD 2025 里会被判无效，改为可选）；原生标注按 ZWCAD 写法修正：*D 块名、BLOCK 头 70=1、BLOCK_RECORD 340/0/280/281、样式优先 ISO-25",
-  "commit": "dee92fc",
+  "version": "20260916.1320",
+  "time": "2026-09-16 13:20:27",
+  "notes": "线号标注增加\"标注外观\"方案（尺寸线/界线/箭头+文字，全是普通实体）；界面改为 文字/标注外观/原生标注 三选一，默认文字",
+  "commit": "b2d8b02",
   "url": "https://codeload.github.com/cszmw2k6dk-design/single-cad/zip/refs/heads/main"
 }
