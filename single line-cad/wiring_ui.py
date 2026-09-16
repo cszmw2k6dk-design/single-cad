@@ -108,12 +108,14 @@ def maybe_reload():
     return "已自动重载改过的代码（%s）" % now
 
 # ----------------------------- 进度 -----------------------------
-PROGRESS = {"pct": 0, "stage": "", "running": False, "seq": 0}
+PROGRESS = {"pct": 0, "stage": "", "running": False, "seq": 0, "tail": []}
 
 
-def set_progress(pct, stage=""):
+def set_progress(pct, stage="", tail=None):
     PROGRESS["pct"] = int(max(0, min(100, pct)))
     PROGRESS["stage"] = stage
+    if tail is not None:
+        PROGRESS["tail"] = [str(x) for x in list(tail)[-8:]]
     PROGRESS["seq"] += 1
 
 
@@ -450,6 +452,9 @@ a.dl{display:inline-block;margin-top:8px;color:var(--brand)}
         <div id="progBar" style="height:100%;width:0%;background:linear-gradient(90deg,#0f3a75,#1466c8);transition:width .25s"></div>
       </div>
       <div id="progTxt" style="font-size:12px;color:#7b8494;margin-top:5px"></div>
+      <pre id="progLog" style="display:none;margin:8px 0 0;padding:8px 10px;background:#f6f7f9;
+           border:1px solid #e3e6ea;border-radius:6px;max-height:170px;overflow:auto;
+           font-size:12px;line-height:1.5;color:#5a636f;white-space:pre-wrap"></pre>
     </div>
   </div>
 </div>
@@ -536,12 +541,20 @@ function progStart(txt){
   document.getElementById('progWrap').style.display='block';
   document.getElementById('progBar').style.width='0%';
   document.getElementById('progTxt').textContent=txt||'开始…';
+  const _pl=document.getElementById('progLog');
+  if(_pl){_pl.style.display='none';_pl.textContent='';}
   if(progTimer) clearInterval(progTimer);
   progTimer=setInterval(async ()=>{
     try{
       const r=await fetch('/api/progress'); const d=await r.json();
       document.getElementById('progBar').style.width=(d.pct||0)+'%';
       document.getElementById('progTxt').textContent=(d.pct||0)+'%  '+(d.stage||'');
+      const lg=document.getElementById('progLog');
+      if(lg && d.tail && d.tail.length){
+        lg.style.display='block';
+        lg.textContent=d.tail.join('\n');
+        lg.scrollTop=lg.scrollHeight;
+      }
     }catch(e){}
   },200);
 }
@@ -865,6 +878,12 @@ class Handler(BaseHTTPRequestHandler):
         """阵列 + 线束（手册第 13 章）：界面上的线束链复用“块库 + 链”两块。"""
         PROGRESS["running"] = True
         set_progress(1, "准备")
+        # 进度回调：把当前阶段 + 最近几行日志一起报给界面（画到 CAD 那段尤其需要，
+        # 否则 CAD 连上/在画什么，界面上什么都看不到）
+        _box = {"log": []}
+
+        def pg(pct, stage):
+            set_progress(pct, stage, _box["log"][-8:])
         ln = int(self.headers.get("Content-Length", 0))
         req = json.loads(self.rfile.read(ln).decode("utf-8"))
         frame_name = req.get("frame", "") or ""
@@ -894,12 +913,14 @@ class Handler(BaseHTTPRequestHandler):
                     keep_from=(os.path.join(OUTDIR, os.path.basename(req["keep_from"]))
                                if req.get("keep_from") else ""))
         text, log, wires = wr.build_array_frame(os.path.join(FRAMES_DIR, frame_name), spec,
-                                                progress=progress_cb)
+                                                log=_box["log"], progress=pg)
+        _box["log"] = log          # 后面 CAD 那段继续往这个列表里追加，界面能看到
         if not text:
             PROGRESS["running"] = False
             self._send(200, json.dumps({"svg": "", "log": log}).encode("utf-8"),
                        "application/json"); return
         set_progress(85, "写 DXF 文件")
+        pg(85, "写 DXF 文件")
         os.makedirs(OUTDIR, exist_ok=True)
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         fn = "array_%s.dxf" % ts
@@ -919,11 +940,11 @@ class Handler(BaseHTTPRequestHandler):
                 cd.draw_dxf_into_cad(outpath, dwg, log,
                                      use_original=bool(req.get("cad_original")),
                                      copy_dir=OUTDIR,
-                                     only_blocks=set(
-                                         [x for x in (spec["module"], spec["module_first"],
-                                                     spec["module_mid"], spec["module_last"])
-                                          if x] + list(spec["harness"])),
-                                     progress=progress_cb)
+                                       only_blocks=set(
+                                           [x for x in (spec["module"], spec["module_first"],
+                                                       spec["module_mid"], spec["module_last"])
+                                            if x] + list(spec["harness"])),
+                                       progress=pg)
             except Exception as ex:
                 import traceback
                 log.append("⚠ 画到 CAD 失败: %s: %s" % (type(ex).__name__, ex))
@@ -938,7 +959,7 @@ class Handler(BaseHTTPRequestHandler):
         resp = {"svg": svg, "dxf_url": "/out/" + fn,
                 "csv_url": ("/out/" + csv_fn) if csv_fn else "",
                 "log": log, "dxf_file": outpath}
-        set_progress(100, "完成")
+        set_progress(100, "完成", log[-8:])
         PROGRESS["running"] = False
         sw = stale_warning()
         if sw:                       # 代码在本进程启动之后改过：成功也要提醒，不然会对不上

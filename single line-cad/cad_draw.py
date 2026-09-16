@@ -207,12 +207,19 @@ def ensure_block(doc, name, bmap, log):
     return True, n
 
 
-def replay(doc, dxf_path, log, only_blocks=None, only_layers=OUR_LAYERS):
+def replay(doc, dxf_path, log, only_blocks=None, only_layers=OUR_LAYERS, progress=None):
     """把 dxf_path 里“我们生成的那部分”画进 doc。返回统计。
 
     only_blocks：只回放块名在这里面的 INSERT（外框图自己的块不重画）。
     only_layers：只回放这些层上的线/文字/点。
     """
+    def pg(pct, stage):
+        if progress:
+            try:
+                progress(pct, stage)
+            except Exception:
+                pass
+
     LAY = tuple(x.upper() for x in only_layers) if only_layers else None
     sec, _o = wr.parse_sections_text(wr.read_dxf_text(dxf_path))
     bmap = wr._blocks_map(sec)
@@ -236,6 +243,8 @@ def replay(doc, dxf_path, log, only_blocks=None, only_layers=OUR_LAYERS):
                                wr._gf(e, "40", 2.5)))
     _skip_lab = bool(our_wires and our_labels)
     made = set()
+    pg(94, "正在画 %d 个实体（块定义/连线/文字）…" % len(recs))
+    _n_done = 0
     for e in recs:
         if not e:
             continue
@@ -316,9 +325,14 @@ def replay(doc, dxf_path, log, only_blocks=None, only_layers=OUR_LAYERS):
         except Exception as ex:
             stat["skip"] += 1
             log.append("⚠ 画 %s 失败: %s" % (t, ex))
+        _n_done += 1
+        if _n_done % 20 == 0:
+            pg(94 + min(3, _n_done * 3 // max(1, len(recs))),
+               "正在画实体 %d/%d…" % (_n_done, len(recs)))
 
     # ---- 用 CAD 原生标注：尺寸标注(长度) + 引线标注(线号) ----
     if _skip_lab:
+        pg(97, "正在加标注（长度 %d 个 + 线号）…" % len(our_labels))
         def _nearest_seg(p):
             best, bd = None, None
             for a, b in our_wires:
@@ -434,10 +448,11 @@ def draw_dxf_into_cad(dxf_path, dwg_path, log=None, use_original=False,
     if not os.path.exists(dwg_path):
         log.append("⚠ 找不到 DWG: %s（画到 CAD 需要 DWG，不能是 DXF）" % dwg_path)
         return False
+    pg(86, "正在连接 CAD（ZWCAD / AutoCAD）…（没开的话会自动启动，可能要等十几秒）")
     app = connect(visible=visible, log=log)
     if app is None:
         return False
-    pg(90, "已连上 CAD")
+    pg(88, "已连上 CAD: %s" % getattr(app, "Version", "?"))
     # CAD 正忙着（有命令在跑、或弹了个对话框）时，COM 调用会一直等下去。
     # 先看一眼，忙就先不画，免得界面卡在“生成中…”。
     try:
@@ -449,6 +464,7 @@ def draw_dxf_into_cad(dxf_path, dwg_path, log=None, use_original=False,
     except Exception:
         pass
     target = os.path.abspath(dwg_path)
+    pg(89, "准备目标图：%s" % os.path.basename(dwg_path))
     if not use_original:
         import shutil
         d = copy_dir or os.path.dirname(os.path.abspath(dxf_path))
@@ -467,12 +483,13 @@ def draw_dxf_into_cad(dxf_path, dwg_path, log=None, use_original=False,
     for lay in ("WIRE", "WIRE_LABEL", "CONN_POS", "CONN_NEG", "0"):
         ensure_layer(doc, lay)
     if clear_first:
+        pg(92, "清掉上次程序画的连线/标注…")
         n = clear_ours(doc, only_blocks, OUR_LAYERS, log)
         if n:
             log.append("先清掉上一次程序画的内容 %d 个（只删 %s 层和这几个块的插入）"
                        % (n, "/".join(OUR_LAYERS)))
-    stat = replay(doc, dxf_path, log, only_blocks=only_blocks)
-    pg(98, "实体画完，正在加标注/刷新")
+    stat = replay(doc, dxf_path, log, only_blocks=only_blocks, progress=pg)
+    pg(98, "实体画完，正在加长度标注/线号，并缩放到范围")
     try:
         app.ZoomExtents()
     except Exception:
@@ -482,5 +499,5 @@ def draw_dxf_into_cad(dxf_path, dwg_path, log=None, use_original=False,
                % (stat["INSERT"], stat["LINE"], stat["LWPOLYLINE"], stat["TEXT"],
                   stat["POINT"], stat["skip"], stat["blk_prim"]))
     log.append("没有自动保存，你在 CAD 里看过再决定存不存。")
-    pg(100, "完成")
+    pg(100, "画到 CAD 完成（还没保存，你在 CAD 里确认后自己存）")
     return True

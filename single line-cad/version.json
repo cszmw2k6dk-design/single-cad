@@ -1,7 +1,7 @@
 {
-  "version": "20260916.1329",
-  "time": "2026-09-16 13:29:04",
-  "notes": "cad_draw 修 COM 直画：补 import math（缺它导致加标注那步直接崩、长度标注一个都建不出来）；长度标注按图纸字高设文字高+箭头（默认 2.5 在 1600 单位外框上看不见）",
-  "commit": "f580190",
+  "version": "20260916.1339",
+  "time": "2026-09-16 13:39:25",
+  "notes": "画到 CAD 加实时流程：连接 CAD、打开目标图、画实体 x/y、加标注各阶段都上报进度，界面进度条下实时显示最近日志（以前只有 90/98/100，点了按钮不知道 CAD 有没有开）",
+  "commit": "9a474f1",
   "url": "https://codeload.github.com/cszmw2k6dk-design/single-cad/zip/refs/heads/main"
 }
