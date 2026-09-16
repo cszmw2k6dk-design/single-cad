@@ -333,6 +333,17 @@ def replay(doc, dxf_path, log, only_blocks=None, only_layers=OUR_LAYERS, progres
     # ---- 用 CAD 原生标注：尺寸标注(长度) + 引线标注(线号) ----
     if _skip_lab:
         pg(97, "正在加标注（长度 %d 个 + 线号）…" % len(our_labels))
+        _lab_pts = [L[0] for L in our_labels]
+
+        def _nearest_pt(pts, p):
+            """离 p 最近的 CONN-Label 点（左右界限都用它，不用导线自己的接点）。"""
+            best, bd = None, None
+            for q in pts:
+                d2 = (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2
+                if bd is None or d2 < bd:
+                    best, bd = q, d2
+            return best
+
         def _nearest_seg(p):
             best, bd = None, None
             for a, b in our_wires:
@@ -357,20 +368,29 @@ def replay(doc, dxf_path, log, only_blocks=None, only_layers=OUR_LAYERS, progres
             nx, ny = -dy / L, dx / L
             off = max(h * 2.0, L * 0.06)         # 尺寸线离线多远
             try:
-                d = ms.AddDimAligned(pt(a[0], a[1]), pt(b[0], b[1]),
+                # 尺寸界线的左右界限 = 两端块里 CONN-Label 层的点（用户确认的取点方式）
+                o1 = _nearest_pt(_lab_pts, a) or a
+                o2 = _nearest_pt(_lab_pts, b) or b
+                d = ms.AddDimAligned(pt(o1[0], o1[1]), pt(o2[0], o2[1]),
                                      pt(mid[0] + nx * off, mid[1] + ny * off))
-                # 标注样式：优先用 ISO-25（值正常、非注释性）；注释性样式在小比例下会看不见
-                for _st in ("ISO-25", "Standard"):
+                # 标注样式：按用户图纸的格式用 Voltage（注释性 1:1、文字样式 Voltage）
+                for _st in ("Voltage", "ISO-25", "Standard"):
                     try:
                         d.StyleName = _st
                         break
                     except Exception:
                         pass
-                # 默认文字高/箭头只有 2.5 —— 在 1600 单位的外框图纸上等于看不见。
-                # 按线号字高（从 DXF 的 WIRE_LABEL 文字高读到的 h）给标注文字和箭头定值。
+                # 用户面板上的格式：文字高度 8、文字偏移 0.1、文字颜色 蓝(5)、文字样式 Voltage
+                for _attr, _val in (("TextHeight", 8.0), ("TextGap", 0.1),
+                                    ("TextStyle", "Voltage"), ("TextColor", 5)):
+                    try:
+                        setattr(d, _attr, _val)
+                    except Exception:
+                        pass
+                # 箭头：样式里给的太小（外框图自带的样式常常是 0.08）才兜底改成可见的
                 try:
-                    d.TextHeight = max(float(h), 1.0)
-                    d.ArrowheadSize = max(float(h) * 0.83, 0.8)
+                    if float(d.ArrowheadSize) < 3.0:
+                        d.ArrowheadSize = 6.6
                 except Exception:
                     pass
                 ensure_layer(doc, "DIM")

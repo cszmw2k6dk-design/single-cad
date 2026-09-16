@@ -1951,7 +1951,11 @@ def build_array_frame(frame, spec, log=None, progress=None):
         if cands:
             mx, my = (a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0
             q = min(cands, key=lambda p: (p[0] - mx) ** 2 + (p[1] - my) ** 2)
-            if emit_annot(a, b, q, txt):
+            # 尺寸界线的**左右界限**取块里 CONN-Label 层的点：
+            # 两端各取离这条线端点最近的那个标注点（不是导线自己的接点）。
+            e1 = min(cands, key=lambda p: (p[0] - a[0]) ** 2 + (p[1] - a[1]) ** 2)
+            e2 = min(cands, key=lambda p: (p[0] - b[0]) ** 2 + (p[1] - b[1]) ** 2)
+            if emit_annot(e1, e2, q, txt):
                 n_lab_done += 1
                 return
             emit_label(q[0], q[1], txt)

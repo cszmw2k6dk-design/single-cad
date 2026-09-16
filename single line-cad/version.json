@@ -1,7 +1,7 @@
 {
-  "version": "20260916.1339",
-  "time": "2026-09-16 13:39:25",
-  "notes": "画到 CAD 加实时流程：连接 CAD、打开目标图、画实体 x/y、加标注各阶段都上报进度，界面进度条下实时显示最近日志（以前只有 90/98/100，点了按钮不知道 CAD 有没有开）",
-  "commit": "9a474f1",
+  "version": "20260916.1357",
+  "time": "2026-09-16 13:57:12",
+  "notes": "标注按用户格式：尺寸界线左右界限取两端块的 CONN-Label 点（不再用导线接点）；样式 Voltage、文字高 8、文字偏移 0.1、文字样式 Voltage、文字颜色蓝；箭头太小才兜底改可见",
+  "commit": "905c84f",
   "url": "https://codeload.github.com/cszmw2k6dk-design/single-cad/zip/refs/heads/main"
 }
