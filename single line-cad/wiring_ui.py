@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-wiring_ui.py -- 连线生成器 UI（本地网站）
+wiring_ui.py -- Single-CAD UI（本地网站）
 
 界面：左边从块库选块(可重复)，右边组成一条“链”，点“生成连线” ->
       按顺序放块、解插入点、接点对齐、连完线，输出 DXF(保图层) + 预览。
@@ -338,7 +338,7 @@ def open_with_default(name):
 HTML = r"""<!doctype html>
 <html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>连线生成器</title>
+<title>Single-CAD</title>
 <style>
  /* 配色/控件风格参照用户另一套 CAD-MAP 编排器的 QSS（深色 + 蓝色主色 + 橙色强调点） */
  :root{--bg:#131415;--card:#17181a;--field:#1f2124;--log:#101113;--line:#2a2c2e;
@@ -409,8 +409,8 @@ HTML = r"""<!doctype html>
 <body>
 <header>
   <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-    <span class="logo">SLD</span>
-    <h1 style="flex:0 0 auto">连线生成器</h1>
+    <span class="logo">SC</span>
+    <h1 style="flex:0 0 auto">Single-CAD</h1>
     <div style="flex:1 1 320px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end">
       <span id="verTxt">版本 {{VER}}（{{VERNOTE}}）</span>
       <button class="ghost" id="updBtn" onclick="checkUpdate()"
@@ -1006,12 +1006,12 @@ def main():
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--browser", action="store_true",
                     help="强制用浏览器打开（默认：能开桌面窗口就用桌面窗口）")
-    ap.add_argument("--title", default="Barnett 单线图生成器")
+    ap.add_argument("--title", default="Single-CAD")
     args = ap.parse_args()
 
     httpd, port = make_server(args.port)
     url = "http://127.0.0.1:%d" % port
-    print("单线图生成器已启动:", url)
+    print("Single-CAD 已启动:", url)
     print("代码版本:", code_version(), "(改过代码要重启本进程才生效)")
     print("块库:", BLOCKS_DIR)
     print("输出:", OUTDIR)

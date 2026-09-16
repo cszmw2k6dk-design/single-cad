@@ -10,10 +10,10 @@
      统统写进 exe 旁边的「启动日志.txt」，出问题能查。
 
 用法：
-    Barnett单线图生成器.exe                 正常用（桌面窗口）
-    Barnett单线图生成器.exe --browser       用浏览器打开
-    Barnett单线图生成器.exe --port 8790     指定端口
-    Barnett单线图生成器.exe --selftest      自检：起服务、跑一次生成、打印结果并退出
+    Single-CAD.exe                 正常用（桌面窗口）
+    Single-CAD.exe --browser       用浏览器打开
+    Single-CAD.exe --port 8790     指定端口
+    Single-CAD.exe --selftest      自检：起服务、跑一次生成、打印结果并退出
 """
 
 import io
@@ -96,7 +96,7 @@ def _setup_logging():
     """无控制台运行时，日志文件是唯一的排错入口。"""
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("Barnett 单线图生成器 启动日志\n")
+            f.write("Single-CAD 启动日志\n")
             f.write("exe: %s\n" % (sys.executable if _FROZEN else __file__))
             f.write("frozen(打包运行): %s\n\n" % _FROZEN)
     except Exception:

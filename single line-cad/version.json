@@ -1,7 +1,7 @@
 {
-  "version": "20260916.1502",
-  "time": "2026-09-16 15:02:46",
-  "notes": "界面改版：参照 CAD-MAP 编排器的 QSS（深色 #131415、主色 #0432FA、橙色强调点 #F5A800、卡片/药丸按钮/深色输入框、块卡片配浅色缩略图、日志框 Consolas）",
-  "commit": "8d92ecb",
+  "version": "20260916.1506",
+  "time": "2026-09-16 15:06:59",
+  "notes": "应用改名 Single-CAD：界面标题/窗口标题/日志头/exe 名/使用说明/发版脚本全部统一（界面 logo 改 SC）",
+  "commit": "93bd349",
   "url": "https://codeload.github.com/cszmw2k6dk-design/single-cad/zip/refs/heads/main"
 }

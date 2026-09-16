@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-wiring_raw.py -- 连线生成器【不展平】：把块里的实体原样搬运(仅整体平移)，保留所有实体类型。
+wiring_raw.py -- Single-CAD【不展平】：把块里的实体原样搬运(仅整体平移)，保留所有实体类型。
 
 原理：
   - 以第一个块文件作为“容器”(host)，保留它的 HEADER/TABLES/BLOCKS(含嵌套块/图层定义)。
