@@ -46,23 +46,27 @@ def read_version():
         return {}
 
 
+VER_PREFIX = "v"          # 版本号统一 v 开头：v20260916.1506
+
+
 def bump_version(old):
-    """给出一个**严格大于**旧版本号的新版本号：YYYYMMDD.HHMM。
+    """给出一个**严格大于**旧版本号的新版本号：vYYYYMMDD.HHMM。
 
     用当前时间；如果算出来不比旧的大（同一分钟内连着发两次），就把最后两位 +1。
+    旧版本号带不带 v 都能解析（历史数据是 20260916.1506 这种不带前缀的）。
     """
     now = datetime.datetime.now()
     cand = now.strftime("%Y%m%d.%H%M")
 
     def segs(v):
         try:
-            d, hm = str(v).split(".")
+            d, hm = str(v).strip().lstrip("vV").split(".")
             return (int(d), int(hm[:2]), int(hm[2:4]))
         except Exception:
             return (0, 0, 0)
 
-    if segs(cand) > segs(old):
-        return cand
+    if not segs(old) or segs(cand) > segs(old):     # 旧号解析不出来就直接用当前时间
+        return VER_PREFIX + cand
     d, h, m = segs(old)
     m += 1
     if m >= 60:
@@ -71,7 +75,7 @@ def bump_version(old):
     if h >= 24:
         h = 0
         d += 1
-    return "%08d.%02d%02d" % (d, h, m)
+    return VER_PREFIX + "%08d.%02d%02d" % (d, h, m)
 
 
 def recent_summary():

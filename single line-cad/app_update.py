@@ -210,10 +210,14 @@ def check():
 
 
 def _is_newer(remote, local):
-    """版本号比较：优先按 (年,月,日,时,分) 这种数字段比，比不出就按字符串。"""
+    """版本号比较：优先按 (年,月,日,时,分) 这种数字段比，比不出就按字符串。
+
+    版本号统一 v 开头（v20260916.1506），但老客户端里存的是不带 v 的号，
+    所以比较前先把前缀剥掉 —— 否则 "v2026…" 会被当成非数字，直接被判成"没有新版本"。
+    """
     def segs(v):
         out = []
-        for part in str(v).replace("-", ".").replace("_", ".").split("."):
+        for part in str(v).strip().lstrip("vV").replace("-", ".").replace("_", ".").split("."):
             out.append(int(part) if part.isdigit() else -1)
         return out
     a, b = segs(remote), segs(local)

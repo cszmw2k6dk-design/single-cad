@@ -17,6 +17,7 @@ import os
 import socketserver
 import threading
 import webbrowser
+import zipfile
 from http.server import BaseHTTPRequestHandler
 
 from sld_generate import Dxf
@@ -430,6 +431,7 @@ HTML = r"""<!doctype html>
       <label>模式</label>
       <label><input type="radio" name="mode" value="chain" checked onchange="setMode('chain')"> 单个链</label>
       <label><input type="radio" name="mode" value="array" onchange="setMode('array')"> 光伏阵列 + 线束</label>
+      <label><input type="radio" name="mode" value="batch" onchange="setMode('batch')"> 批量（一行一张·逐张独立）</label>
     </div>
     <div class="row" id="arrayRow" style="display:none">
       <label>组件 首块</label><select id="mod1"></select>
@@ -471,6 +473,35 @@ HTML = r"""<!doctype html>
       <label><input type="checkbox" id="tocad"> 直接画到 CAD(COM)</label>
       <label><input type="checkbox" id="cadorig"> 画在原外框文件上（默认画副本）</label>
     </div>
+    <div class="row" id="batchRow" style="display:none;flex-direction:column;align-items:stretch">
+      <div class="row" style="margin-top:0">
+        <label>份数</label><input type="number" id="bcount" value="3" min="1" max="60" step="1" style="width:70px">
+        <label>起始串数</label><input type="number" id="bstart" value="3" min="1" step="1" style="width:70px">
+        <label>每张 +</label><input type="number" id="bstep" value="1" step="1" style="width:70px">
+        <label>每串板数</label><input type="number" id="bnper" value="20" min="1" step="1" style="width:80px">
+        <label>起始图号</label><input type="text" id="bno" value="SLD-001" style="width:110px">
+        <button class="ghost" onclick="fillBatch()">按上面参数铺出 N 行</button>
+        <button class="ghost" onclick="clearBatch()">清空行</button>
+      </div>
+      <div style="max-height:250px;overflow:auto;border:1px solid var(--line);border-radius:8px">
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead><tr>
+            <th style="text-align:left;padding:6px">图号</th>
+            <th style="text-align:left;padding:6px">外框图</th>
+            <th style="text-align:left;padding:6px">串数</th>
+            <th style="text-align:left;padding:6px">每串板数</th>
+            <th style="text-align:left;padding:6px">备注</th><th></th>
+          </tr></thead>
+          <tbody id="bBody"></tbody>
+        </table>
+      </div>
+      <div class="row" style="margin-top:0">
+        <button onclick="genBatch()">生成全部（每行一张）</button>
+        <span style="font-size:12px;color:var(--muted)">
+          一行 = 一张图：每张都重新调一次外框模板，参数互不影响。
+          左侧块链和上面那套间距/标注/支线块是各行的公共参数。</span>
+      </div>
+    </div>
     <div class="row">
       <label>间隔 GAP</label><input type="number" id="gap" value="40" step="5">
       <span class="chainOnly"><label>占框比例%</label><input type="number" id="fit" value="55" step="5" min="10" max="100"></span>
@@ -498,13 +529,18 @@ let lastOut={dxf:'', csv:''};   // 最近一次生成的文件名（桌面窗口
 let framesReady=false;
 let lastBlocks=[];      // 块库里所有块名（给“正极/负极支线块”下拉用）
 let mode='chain';
+let frameList=[];       // 外框图列表（批量模式的外框图下拉要用）
+let batchRows=[];       // 批量模式：一行 = 一张图（各自独立参数）
 function setMode(m){
   mode=m;
-  document.getElementById('arrayRow').style.display=(m==='array')?'flex':'none';
-  document.querySelectorAll('.chainOnly').forEach(e=>{e.style.display=(m==='array')?'none':''});
-  document.querySelectorAll('h2')[1].textContent=(m==='array')
-    ? '② 线束（可以不填：留空自动排“末端母头 + 正极支线×(串数-1) + 末端公头”；想带保险丝等串联块就把块点上来）'
-    : '② 链（按顺序摆放并连线）';
+  const arr=(m==='array'||m==='batch');
+  document.getElementById('arrayRow').style.display=arr?'flex':'none';
+  document.getElementById('batchRow').style.display=(m==='batch')?'flex':'none';
+  document.querySelectorAll('.chainOnly').forEach(e=>{e.style.display=arr?'none':''});
+  document.querySelectorAll('h2')[1].textContent=(m==='chain')
+    ? '② 链（按顺序摆放并连线）'
+    : ('② 线束（可以不填：留空自动排“末端母头 + 正极支线×(串数-1) + 末端公头”；'
+       + '想带保险丝等串联块就把块点上来）');
 }
 async function loadBlocks(){
   const fs=document.getElementById('frame');
@@ -512,6 +548,7 @@ async function loadBlocks(){
   const r=await fetch('/api/blocks'+(fr?('?frame='+encodeURIComponent(fr)):'')); const d=await r.json();
   if(!framesReady){
     fs.innerHTML='<option value="">不用</option>';
+    frameList=(d.frames||[]).slice();
     (d.frames||[]).forEach(f=>{ const o=document.createElement('option'); o.value=f; o.textContent=f; fs.appendChild(o); });
     framesReady=true;
     if((d.frames||[]).length){ fs.value=d.frames[0]; return loadBlocks(); }
@@ -598,8 +635,112 @@ function progStop(finalText){
   document.getElementById('progTxt').textContent=finalText||'完成';
   setTimeout(()=>{document.getElementById('progWrap').style.display='none';},1500);
 }
+// 阵列模式的一组公共参数（阵列模式与批量模式共用；批量模式每行再覆盖串数/板数）
+function arrayCommon(){
+  return {harness:chain, gap:parseFloat(document.getElementById('gap').value)||40,
+          module_first:document.getElementById('mod1').value,
+          module_mid:document.getElementById('mod2').value,
+          module_last:document.getElementById('mod3').value,
+          n_per:parseInt(document.getElementById('nper').value)||20,
+          n_strings:parseInt(document.getElementById('nstr').value)||1,
+          gap_x:parseFloat(document.getElementById('gapx').value)||0,
+          gap_y:parseFloat(document.getElementById('gapy').value)||0,
+          dir:document.getElementById('dir').value,
+          harness_scale:parseFloat(document.getElementById('hscale').value)||1,
+          fixed_gap:parseFloat(document.getElementById('fixgap').value)||30,
+          head_block:document.getElementById('headblk').value.trim(),
+          head_gap:parseFloat(document.getElementById('headgap').value)||30,
+          neg_rotate:(document.getElementById('negrot')?
+                      (parseFloat(document.getElementById('negrot').value)||0):0),
+          neg_gap:(document.getElementById('neggap')?
+                   (parseFloat(document.getElementById('neggap').value)||30):30),
+          pos_plug:document.getElementById('posplug').value.trim(),
+          neg_plug:document.getElementById('negplug').value.trim(),
+          link_array:document.getElementById('link').checked,
+          match_span:document.getElementById('hspan').checked,
+          pos_feeder:document.getElementById('posfeed').value.trim(),
+          neg_feeder:document.getElementById('negfeed').value.trim(),
+          awg_main:document.getElementById('awgmain').value.trim(),
+          awg_branch:document.getElementById('awgbranch').value.trim(),
+          annot:(document.getElementById('annot')||{}).value||'text',
+          allow_enlarge:document.getElementById('enlarge').checked};
+}
+
+// ---------- 批量（一行 = 一张图，逐张独立） ----------
+function pad3(n){ return String(n).padStart(3,'0'); }
+function fillBatch(){
+  const cnt=Math.max(1,Math.min(60,parseInt(v('bcount',3))||3));
+  const s0=Math.max(1,parseInt(v('bstart',3))||1);
+  const st=parseInt(v('bstep',1)); const step=isNaN(st)?1:st;
+  const np=Math.max(1,parseInt(v('bnper',20))||20);
+  const fr=document.getElementById('frame').value||'';
+  const raw=(v('bno','SLD-001')||'SLD-001').trim();
+  const m=raw.match(/^(.*?)(\d+)\s*$/);          // SLD-001 → 前缀 SLD-、起始 1
+  const pre=m?m[1]:raw, n0=m?parseInt(m[2]):1;
+  batchRows=[];
+  for(let i=0;i<cnt;i++){
+    batchRows.push({no:pre+pad3(n0+i), frame:fr,
+                    n_str:Math.max(1,s0+i*step), n_per:np, note:''});
+  }
+  renderBatch();
+}
+function clearBatch(){ batchRows=[]; renderBatch(); }
+function renderBatch(){
+  const tb=document.getElementById('bBody'); tb.innerHTML='';
+  batchRows.forEach((r,i)=>{
+    const tr=document.createElement('tr'); tr.style.borderTop='1px solid var(--line)';
+    const td=()=>{const c=document.createElement('td');c.style.padding='4px';tr.appendChild(c);return c;};
+    let c=td(), e=document.createElement('input');
+    e.type='text'; e.value=r.no; e.style.width='96px'; e.oninput=()=>{r.no=e.value;}; c.appendChild(e);
+    c=td(); const s=document.createElement('select'); s.style.maxWidth='240px';
+    ['',...(frameList||[])].forEach(f=>{const o=document.createElement('option');o.value=f;o.textContent=f||'（不选）';s.appendChild(o);});
+    s.value=r.frame||''; s.onchange=()=>{r.frame=s.value;}; c.appendChild(s);
+    c=td(); e=document.createElement('input'); e.type='number'; e.min='1';
+    e.value=r.n_str; e.style.width='70px'; e.oninput=()=>{r.n_str=parseInt(e.value)||1;}; c.appendChild(e);
+    c=td(); e=document.createElement('input'); e.type='number'; e.min='1';
+    e.value=r.n_per; e.style.width='70px'; e.oninput=()=>{r.n_per=parseInt(e.value)||1;}; c.appendChild(e);
+    c=td(); e=document.createElement('input'); e.type='text';
+    e.value=r.note||''; e.style.width='100%'; e.oninput=()=>{r.note=e.value;}; c.appendChild(e);
+    c=td(); const b=document.createElement('button'); b.className='ghost'; b.textContent='删';
+    b.onclick=()=>{batchRows.splice(i,1);renderBatch();}; c.appendChild(b);
+    tb.appendChild(tr);
+  });
+}
+async function genBatch(){
+  if(!batchRows.length){ alert('还没有要画的图：先填份数，点“按上面参数铺出 N 行”'); return; }
+  const frame0=document.getElementById('frame').value||'';
+  if(!batchRows.some(r=>r.frame||frame0)){ alert('批量模式要先选外框图'); return; }
+  document.getElementById('out').innerHTML='生成中…';
+  progStart('提交…');
+  const body=arrayCommon();
+  body.frame=frame0; body.rows=batchRows;
+  body.keep_from=document.getElementById('keepfrom').value;
+  body.to_cad=document.getElementById('tocad').checked;
+  body.cad_original=document.getElementById('cadorig').checked;
+  const r=await fetch('/api/generate_batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const d=await r.json();
+  progStop('完成');
+  const fl=d.files||[];
+  lastOut={dxf:(fl[0]?fl[0].name:''), csv:''};
+  const rowsHtml=fl.map(f=>
+      '<div class="dlrow"><b style="min-width:110px">'+f.no+'</b>'+
+      '<button class="ghost" onclick="fileAct(\'open\',\''+f.name+'\')">用CAD打开</button> '+
+      '<button class="ghost" onclick="fileAct(\'export\',\''+f.name+'\')">DXF存桌面</button> '+
+      (f.csv_url?('<button class="ghost" onclick="fileAct(\'export\',\''+f.csv+'\')">CSV存桌面</button> '):'')+
+      (f.url?('<a class="dl" href="'+f.url+'" download>下载DXF</a> '):'')+
+      (f.csv_url?('<a class="dl" href="'+f.csv_url+'" download>下载CSV</a>'):'')+
+      '</div>').join('');
+  document.getElementById('out').innerHTML =
+    '<div class="dlrow"><b>共 '+(d.total||fl.length)+' 张，成功 '+fl.length+' 张</b>'+
+      (d.zip_url?('<a class="dl" href="'+d.zip_url+'" download>下载全部(zip)</a> '):'')+
+      '<button class="ghost" onclick="fileAct(\'reveal\')">打开输出文件夹</button>'+
+      '<span id="fileMsg" style="font-size:12px;color:var(--muted);margin-left:8px"></span></div>'+
+    rowsHtml+'<div id="log">'+(d.log||[]).join('\n')+'</div>';
+}
+
 async function gen(){
   if(mode==='array' && !document.getElementById('frame').value){alert('阵列模式必须先选外框图');return;}
+  if(mode==='batch'){ return genBatch(); }
   if(!chain.length && mode==='chain'){alert('先选块');return;}
   document.getElementById('log') && (document.getElementById('log').textContent='');
   document.getElementById('out').innerHTML='生成中…';
@@ -614,33 +755,8 @@ async function gen(){
               frame:document.getElementById('frame').value};
   if(mode==='array'){
     url='/api/generate_array';
-    body={harness:chain, gap:gap, frame:document.getElementById('frame').value,
-          module_first:document.getElementById('mod1').value,
-          module_mid:document.getElementById('mod2').value,
-          module_last:document.getElementById('mod3').value,
-          n_per:parseInt(document.getElementById('nper').value)||20,
-          n_strings:parseInt(document.getElementById('nstr').value)||1,
-          gap_x:parseFloat(document.getElementById('gapx').value)||0,
-          gap_y:parseFloat(document.getElementById('gapy').value)||0,
-          dir:document.getElementById('dir').value,
-          harness_scale:parseFloat(document.getElementById('hscale').value)||1,
-          fixed_gap:parseFloat(document.getElementById('fixgap').value)||30,
-          head_block:document.getElementById('headblk').value.trim(),
-          head_gap:parseFloat(document.getElementById('headgap').value)||30,
-          neg_rotate:(document.getElementById('negrot')?
-                      (parseFloat(document.getElementById('negrot').value)||0):180),
-          neg_gap:(document.getElementById('neggap')?
-                   (parseFloat(document.getElementById('neggap').value)||30):30),
-          pos_plug:document.getElementById('posplug').value.trim(),
-          neg_plug:document.getElementById('negplug').value.trim(),
-          link_array:document.getElementById('link').checked,
-          match_span:document.getElementById('hspan').checked,
-          pos_feeder:document.getElementById('posfeed').value.trim(),
-          neg_feeder:document.getElementById('negfeed').value.trim(),
-            awg_main:document.getElementById('awgmain').value.trim(),
-            awg_branch:document.getElementById('awgbranch').value.trim(),
-            annot:(document.getElementById('annot')||{}).value||'text',
-            allow_enlarge:document.getElementById('enlarge').checked};
+    body=arrayCommon();
+    body.frame=document.getElementById('frame').value;
     body.keep_from=document.getElementById('keepfrom').value;
     body.to_cad=document.getElementById('tocad').checked;
     body.cad_original=document.getElementById('cadorig').checked;
@@ -709,6 +825,50 @@ checkUpdate();     // 启动时静默检查一次（失败不影响使用）
 </script>
 </body></html>
 """
+
+
+def array_spec(req, over=None):
+    """把界面送来的一堆阵列参数拼成 build_array_frame 要的 spec。
+
+    批量模式每张图参数不同：把这一张要覆盖的字段放进 over（空值不覆盖），
+    其余全部沿用界面上那一套（块链、支线块、间距、标注方式……）。
+    """
+    spec = dict(module=req.get("module", ""), n_per=req.get("n_per", 20),
+                module_first=req.get("module_first", ""),
+                module_mid=req.get("module_mid", ""),
+                module_last=req.get("module_last", ""),
+                n_strings=req.get("n_strings", 1), gap_x=req.get("gap_x", 2),
+                gap_y=req.get("gap_y", 30), dir=req.get("dir", "right"),
+                harness_scale=req.get("harness_scale", 1.0),
+                fixed_gap=req.get("fixed_gap", 30.0),
+                head_block=req.get("head_block", ""),
+                head_gap=req.get("head_gap", 30.0),
+                pos_plug=req.get("pos_plug", ""),
+                neg_plug=req.get("neg_plug", ""),
+                link_array=bool(req.get("link_array")),
+                match_span=bool(req.get("match_span", True)),
+                harness=req.get("harness", []), gap=req.get("gap", 40),
+                pos_feeder=req.get("pos_feeder", ""),
+                neg_feeder=req.get("neg_feeder", ""),
+                awg_main=req.get("awg_main", ""),
+                awg_branch=req.get("awg_branch", ""),
+                annot=req.get("annot", "text"),
+                neg_rotate=req.get("neg_rotate", 0.0),
+                neg_gap=req.get("neg_gap", 30.0),
+                allow_enlarge=bool(req.get("allow_enlarge")),
+                keep_from=(os.path.join(OUTDIR, os.path.basename(req["keep_from"]))
+                           if req.get("keep_from") else ""))
+    for k, v in (over or {}).items():
+        if v is None or v == "":
+            continue
+        spec[k] = v
+    return spec
+
+
+def safe_name(s, dflt="SLD"):
+    """图号当文件名用：去掉 Windows 不认的字符，空的就用默认名。"""
+    out = "".join(("-" if c in '\\/:*?"<>|' else c) for c in str(s or "")).strip(" .")
+    return out or dflt
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -817,7 +977,8 @@ class Handler(BaseHTTPRequestHandler):
             p = os.path.join(OUTDIR, fn)
             if os.path.exists(p):
                 ct = ("text/csv; charset=utf-8" if fn.lower().endswith(".csv")
-                      else "application/dxf")
+                      else ("application/zip" if fn.lower().endswith(".zip")
+                            else "application/dxf"))
                 # 带上附件头：浏览器模式下点了就直接下载（窗口模式走 /api/file/*）
                 self.send_response(200)
                 self.send_header("Content-Type", ct)
@@ -852,6 +1013,8 @@ class Handler(BaseHTTPRequestHandler):
     def _do_post(self):
         if self.path == "/api/generate_array":
             self._generate_array(); return
+        if self.path == "/api/generate_batch":
+            self._generate_batch(); return
         if self.path != "/api/generate":
             self._send(404, b"not found"); return
         ln = int(self.headers.get("Content-Length", 0))
@@ -924,28 +1087,7 @@ class Handler(BaseHTTPRequestHandler):
         if not frame_name:
             self._send(200, json.dumps({"svg": "", "log": ["阵列模式必须先选外框图"]}
                                        ).encode("utf-8"), "application/json"); return
-        spec = dict(module=req.get("module", ""), n_per=req.get("n_per", 20),
-                    module_first=req.get("module_first", ""),
-                    module_mid=req.get("module_mid", ""),
-                    module_last=req.get("module_last", ""),
-                    n_strings=req.get("n_strings", 1), gap_x=req.get("gap_x", 2),
-                    gap_y=req.get("gap_y", 30), dir=req.get("dir", "right"),
-                    harness_scale=req.get("harness_scale", 1.0),
-                    fixed_gap=req.get("fixed_gap", 30.0),
-                    head_block=req.get("head_block", ""),
-                    head_gap=req.get("head_gap", 30.0),
-                    pos_plug=req.get("pos_plug", ""),
-                    neg_plug=req.get("neg_plug", ""),
-                    link_array=bool(req.get("link_array")),
-                    match_span=bool(req.get("match_span", True)),
-                    harness=req.get("harness", []), gap=req.get("gap", 40),
-                    pos_feeder=req.get("pos_feeder", ""),
-                    neg_feeder=req.get("neg_feeder", ""),
-                    awg_main=req.get("awg_main", ""),
-                    awg_branch=req.get("awg_branch", ""),
-                    allow_enlarge=bool(req.get("allow_enlarge")),
-                    keep_from=(os.path.join(OUTDIR, os.path.basename(req["keep_from"]))
-                               if req.get("keep_from") else ""))
+        spec = array_spec(req)
         text, log, wires = wr.build_array_frame(os.path.join(FRAMES_DIR, frame_name), spec,
                                                 log=_box["log"], progress=pg)
         _box["log"] = log          # 后面 CAD 那段继续往这个列表里追加，界面能看到
@@ -999,6 +1141,110 @@ class Handler(BaseHTTPRequestHandler):
         if sw:                       # 代码在本进程启动之后改过：成功也要提醒，不然会对不上
             log = [sw] + list(log)
         self._send(200, json.dumps(resp).encode("utf-8"), "application/json")
+
+    def _generate_batch(self):
+        """批量（一框一张）：一行 = 一张图。
+
+        每张都**重新调一次外框模板**、参数各自独立（第 1 张 3 串、第 2 张 4 串都行），
+        每张单独落一个 DXF（+ 线长 CSV），最后打包一个 zip。
+        """
+        PROGRESS["running"] = True
+        set_progress(1, "准备")
+        ln = int(self.headers.get("Content-Length", 0))
+        req = json.loads(self.rfile.read(ln).decode("utf-8"))
+        rows = [r for r in (req.get("rows") or []) if isinstance(r, dict)]
+        log = []
+        if not rows:
+            PROGRESS["running"] = False
+            self._send(200, json.dumps(
+                {"files": [], "zip_url": "", "total": 0,
+                 "log": ["批量模式还没有要画的图：先填份数、点“铺出 N 行”"]}
+            ).encode("utf-8"), "application/json")
+            return
+        total = len(rows)
+        frame0 = req.get("frame", "") or ""
+        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        os.makedirs(OUTDIR, exist_ok=True)
+        files = []
+        for n, row in enumerate(rows, 1):
+            frame_name = (row.get("frame") or frame0 or "").strip()
+            no = safe_name(row.get("no"), "SLD-%03d" % n)
+            try:                       # 每行可以单独给串数/每串板数，空着就用界面上那套
+                over = {"n_strings": int(row.get("n_strings") or 0) or None,
+                        "n_per": int(row.get("n_per") or 0) or None}
+            except (TypeError, ValueError):
+                over = {}
+            if not frame_name:
+                log.append("—— 第 %d/%d 张 %s：没选外框图，跳过 ——" % (n, total, no))
+                continue
+            frame_path = os.path.join(FRAMES_DIR, os.path.basename(frame_name))
+            spec = array_spec(req, over)
+            log = log + ["—— 第 %d/%d 张 %s（%s，%d 串 × %d 块）——"
+                         % (n, total, no, os.path.basename(frame_name),
+                            spec.get("n_strings", 0), spec.get("n_per", 0))]
+
+            def pg(pct, stage, _n=n, _log=log):
+                set_progress(int(((_n - 1) + max(0.0, min(100.0, float(pct))) / 100.0)
+                                 * 100.0 / total),
+                             "第 %d/%d 张 · %s" % (_n, total, stage), _log[-8:])
+
+            pg(1, "开始")
+            text, rlog, wires = wr.build_array_frame(frame_path, spec, log=log, progress=pg)
+            log = rlog or log
+            if not text:
+                log.append("⚠ %s 没画出来，跳过这张" % no)
+                continue
+            fn = "%s_%s.dxf" % (no, stamp)
+            outpath = os.path.join(OUTDIR, fn)
+            with open(outpath, "w", encoding="latin-1", newline="") as f:
+                f.write(text)
+            csv_fn = ""
+            try:
+                ag.write_csv(os.path.splitext(outpath)[0] + ".csv", wires)
+                csv_fn = os.path.splitext(fn)[0] + ".csv"
+            except Exception as ex:
+                log.append("⚠ 线长清单没写成: %s" % ex)
+            if req.get("to_cad"):
+                log.append("—— 第 %d/%d 张画到 CAD ——" % (n, total))
+                dwg = os.path.join(FRAMES_DIR, os.path.splitext(frame_name)[0] + ".dwg")
+                try:
+                    cd.draw_dxf_into_cad(
+                        outpath, dwg, log,
+                        use_original=bool(req.get("cad_original")), copy_dir=OUTDIR,
+                        only_blocks=set(
+                            [x for x in (spec.get("module", ""), spec.get("module_first", ""),
+                                         spec.get("module_mid", ""), spec.get("module_last", ""))
+                             if x] + list(spec.get("harness") or [])),
+                        progress=pg)
+                except Exception as ex:
+                    import traceback
+                    log.append("⚠ 画到 CAD 失败: %s: %s" % (type(ex).__name__, ex))
+                    log.extend(traceback.format_exc().strip().splitlines()[-4:])
+            files.append({"no": no, "name": fn, "url": "/out/" + fn,
+                          "csv": csv_fn, "csv_url": ("/out/" + csv_fn) if csv_fn else ""})
+        zip_name = ""
+        if files:
+            zip_name = "批量_%s.zip" % stamp
+            try:
+                with zipfile.ZipFile(os.path.join(OUTDIR, zip_name), "w",
+                                     zipfile.ZIP_DEFLATED) as z:
+                    for f in files:
+                        z.write(os.path.join(OUTDIR, f["name"]), f["name"])
+                        if f["csv"]:
+                            z.write(os.path.join(OUTDIR, f["csv"]), f["csv"])
+            except Exception as ex:
+                log.append("⚠ 打包 zip 失败: %s" % ex)
+                zip_name = ""
+        log.append("批量完成：共 %d 张，成功 %d 张" % (total, len(files)))
+        set_progress(100, "批量完成", log[-8:])
+        PROGRESS["running"] = False
+        sw = stale_warning()
+        if sw:
+            log = [sw] + list(log)
+        self._send(200, json.dumps({"files": files, "total": total,
+                                    "zip_url": ("/out/" + zip_name) if zip_name else "",
+                                    "zip_file": zip_name,
+                                    "log": log}).encode("utf-8"), "application/json")
 
 
 def main():

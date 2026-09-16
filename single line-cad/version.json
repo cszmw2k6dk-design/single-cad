@@ -1,7 +1,7 @@
 {
-  "version": "20260916.1506",
-  "time": "2026-09-16 15:06:59",
-  "notes": "应用改名 Single-CAD：界面标题/窗口标题/日志头/exe 名/使用说明/发版脚本全部统一（界面 logo 改 SC）",
-  "commit": "93bd349",
+  "version": "v20260916.2110",
+  "time": "2026-09-16 21:10:59",
+  "notes": "加批量模式：一行一张图、每张重新调模板独立生成（界面表格+自动铺行+/api/generate_batch+打包zip）；版本号统一 v 开头",
+  "commit": "a867ea6",
   "url": "https://codeload.github.com/cszmw2k6dk-design/single-cad/zip/refs/heads/main"
 }

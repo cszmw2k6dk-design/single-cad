@@ -40,13 +40,13 @@ def git(*args, default=""):
 
 
 def auto_version():
-    """取最近一次提交的时间做版本号（UTC，YYYYMMDD.HHMM）。"""
+    """取最近一次提交的时间做版本号（UTC，vYYYYMMDD.HHMM）。"""
     ts = git("log", "-1", "--format=%cd", "--date=format-local:%Y%m%d.%H%M",
              "--date=utc")
     if re.fullmatch(r"\d{8}\.\d{4}", ts or ""):
-        return ts
+        return "v" + ts
     now = datetime.datetime.now(datetime.timezone.utc)
-    return now.strftime("%Y%m%d.%H%M")
+    return "v" + now.strftime("%Y%m%d.%H%M")
 
 
 def main(argv=None):
@@ -58,6 +58,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     ver = args.version or auto_version()
+    ver = ver if str(ver).strip()[:1] in ("v", "V") else "v" + str(ver).strip()
     notes = args.notes or git("log", "-1", "--format=%s")
     data = {
         "version": ver,
