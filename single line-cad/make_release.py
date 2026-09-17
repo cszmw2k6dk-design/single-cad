@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """make_release.py -- 发版：生成/刷新 version.json，可选地提交并推到 GitHub。
 
-在线更新靠仓库根目录的 `version.json`：
-    { "version": "20260914.2030", "time": "...", "notes": "...", "url": "..." }
+在线更新靠程序目录里的 `version.json`：
+    { "version": "v1.0", "time": "...", "notes": "...", "url": "..." }
 
 用法：
     python make_release.py                 # 只写 version.json（看看内容）
@@ -10,8 +10,8 @@
     python make_release.py --commit        # 顺便 git add/commit
     python make_release.py --commit --push # 再推到 GitHub（在线更新真正生效）
 
-版本号规则：默认用「最近一次提交的时间」——UTC 的 YYYYMMDD.HHMM。
-也可以 --version 手动指定。
+版本号规则：从 v1.0 起算，默认在现有 version.json 上把**最后一段数字 +1**
+（v1.0 → v1.1 → v1.2；想发补丁号就 --version v1.0.1）。
 """
 
 import argparse
@@ -40,18 +40,30 @@ def git(*args, default=""):
 
 
 def auto_version():
-    """取最近一次提交的时间做版本号（UTC，vYYYYMMDD.HHMM）。"""
-    ts = git("log", "-1", "--format=%cd", "--date=format-local:%Y%m%d.%H%M",
-             "--date=utc")
-    if re.fullmatch(r"\d{8}\.\d{4}", ts or ""):
-        return "v" + ts
-    now = datetime.datetime.now(datetime.timezone.utc)
-    return "v" + now.strftime("%Y%m%d.%H%M")
+    """下一个版本号：在现有 version.json 上 +1（v1.0 → v1.1）。
+
+    老式日期号（v20260916.1506，第一段是 8 位日期）和空值一律归到新号起点 v1.0。
+    """
+    try:
+        with open(VERSION_PATH, encoding="utf-8") as f:
+            cur = json.load(f).get("version", "")
+    except Exception:
+        cur = ""
+    nums = []
+    for part in re.split(r"[._\-+]+", str(cur or "").strip().lstrip("vV")):
+        if part.isdigit():
+            nums.append(int(part))
+        elif part:
+            break
+    if not nums or nums[0] >= 1000:
+        return "v1.0"
+    nums[-1] += 1
+    return "v" + ".".join(str(n) for n in nums)
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="刷新 version.json / 发版")
-    ap.add_argument("--version", default="", help="手动指定版本号（默认取最近提交时间）")
+    ap.add_argument("--version", default="", help="手动指定版本号（默认在现有版本上把最后一段 +1）")
     ap.add_argument("--notes", default="", help="这次更新说明（会显示在更新提示里）")
     ap.add_argument("--commit", action="store_true", help="生成后 git commit")
     ap.add_argument("--push", action="store_true", help="提交后 git push")

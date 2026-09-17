@@ -20,12 +20,12 @@ import webbrowser
 import zipfile
 from http.server import BaseHTTPRequestHandler
 
-from sld_generate import Dxf
 import blockui_server as ui
 import connect_library as cl
 import wiring_raw as wr
 import array_gen as ag
 import cad_draw as cd
+import i18n                      # 界面中英文对照表（页面里按中文原句查表翻译）
 
 try:                                  # 在线更新（可选，缺了也不影响生成）
     import app_update as upd
@@ -70,7 +70,8 @@ def make_server(port0=DEFAULT_PORT, tries=20):
 
 
 CODE_FILES = ("wiring_raw.py", "wiring_ui.py", "array_gen.py",
-              "connect_library.py", "blockui_server.py", "blockpack.py")
+              "connect_library.py", "blockui_server.py", "blockpack.py",
+              "i18n.py")
 
 
 def code_version():
@@ -98,7 +99,7 @@ def maybe_reload():
         return None
     import importlib
     for name in ("connect_library", "blockui_server", "blockpack",
-                 "wiring_raw", "array_gen", "cad_draw"):
+                 "wiring_raw", "array_gen", "cad_draw", "i18n"):
         m = sys.modules.get(name)
         if m is not None:
             try:
@@ -133,116 +134,6 @@ def stale_warning():
                 "**关掉这个黑窗口、重新跑一次 python wiring_ui.py**，"
                 "否则跑的还是旧代码，报错会误导人。" % (LOAD_VER, now))
     return None
-
-
-# ----------------------------- 生成逻辑 -----------------------------
-def build_chain(chain, gap=40.0, match_span=True, show_len=True):
-    """chain: 块名列表(按顺序)。返回 (dxf, log)。"""
-    log = []
-    insts = []
-    for name in chain:
-        prims = cl.flatten(name)
-        pts = [(p["x"], p["y"]) for p in ui.capture_points(name)]
-        if not prims or not pts:
-            log.append("跳过(无几何/连接点): " + name)
-            continue
-        insts.append({"name": name, "prims": prims, "pts": pts})
-    if not insts:
-        return None, ["没有可用块"]
-
-    # 可选：把每块“右侧接点间距”缩放到一致，保证线水平
-    if match_span:
-        base_r = cl.side_ports(insts[0]["prims"], insts[0]["pts"], "right")
-        target = (base_r[0][1] - base_r[-1][1]) if len(base_r) >= 2 else 0.0
-        if target > 1e-6:
-            for it in insts:
-                r = cl.side_ports(it["prims"], it["pts"], "right")
-                if len(r) >= 2:
-                    sp = r[0][1] - r[-1][1]
-                    if sp > 1e-6:
-                        s = target / sp
-                        it["prims"] = cl.scale_prims(it["prims"], s)
-                        it["pts"] = [(x * s, y * s) for x, y in it["pts"]]
-
-    def match_pairs(a_pts, b_pts):
-        """按 Y 就近，把两组接点一一配对(贪心)。返回 [(i, j), ...]。"""
-        cand = sorted((abs(a[1] - b[1]), i, j)
-                      for i, a in enumerate(a_pts)
-                      for j, b in enumerate(b_pts))
-        pi, pj, res = set(), set(), []
-        for d, i, j in cand:
-            if i in pi or j in pj:
-                continue
-            pi.add(i); pj.add(j); res.append((i, j))
-        return res
-
-    dxf = Dxf()
-    prev_outs = None      # 上一块右侧接点(已放到图上的绝对坐标)
-    prev_right = None     # 上一块几何右边界 x
-    for idx, it in enumerate(insts):
-        r = cl.side_ports(it["prims"], it["pts"], "right")   # 局部
-        l = cl.side_ports(it["prims"], it["pts"], "left")    # 局部
-        if idx == 0:
-            P = (0.0, 0.0)
-        else:
-            # 按 Y 就近配对，取“上一块接点Y - 本块接点Y”的中位数当纵向偏移
-            pr = match_pairs(prev_outs, l)
-            offs = sorted(prev_outs[i][1] - l[j][1] for (i, j) in pr)
-            off = offs[len(offs) // 2] if offs else 0.0
-            b_local = cl.bbox(it["prims"])
-            P = (prev_right + gap - b_local[0], off)   # 左边界在上一块右侧+间隔
-        placed = cl.move_prims(it["prims"], *P)
-        cl.emit(dxf, placed)
-        b = cl.bbox(placed)
-        outs = [(x + P[0], y + P[1]) for x, y in r]
-        lins = [(x + P[0], y + P[1]) for x, y in l]
-        if idx > 0:
-            pr2 = match_pairs(prev_outs, lins)
-            for (i, j) in pr2:
-                pa = prev_outs[i]
-                pb = lins[j]
-                dxf.line(pa[0], pa[1], pb[0], pb[1], "WIRE")
-                L = ((pa[0] - pb[0]) ** 2 + (pa[1] - pb[1]) ** 2) ** 0.5
-                if show_len:
-                    h = max(4.0, gap * 0.15)
-                    dxf.text((pa[0] + pb[0]) / 2.0, (pa[1] + pb[1]) / 2.0 + h * 1.3,
-                             "%.1f" % L, h, "TEXT")
-                log.append("  线%d: 长 %.2f (由插入位置得出)" % (i + 1, L))
-            log.append("%s -> %s : 连 %d 条线" %
-                       (insts[idx-1]["name"], it["name"], len(pr2)))
-        log.append("放块 %s 于 (%.2f, %.2f)" % (it["name"], P[0], P[1]))
-        prev_outs = outs
-        prev_right = b[1]
-    return dxf, log
-
-
-def dxf_to_svg(dxf):
-    minx, maxx, miny, maxy = dxf.minx, dxf.maxx, dxf.miny, dxf.maxy
-    W, H, pad = 1000, 600, 16
-    sw = max(maxx - minx, 1e-6)
-    sh = max(maxy - miny, 1e-6)
-    sc = min((W - 2 * pad) / sw, (H - 2 * pad) / sh)
-
-    def X(x):
-        return pad + (x - minx) * sc
-
-    def Y(y):
-        return H - pad - (y - miny) * sc
-
-    parts = []
-    for e in dxf.ents:
-        if e[1] == "LINE":
-            parts.append('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" '
-                         'stroke="#1c1c1c" stroke-width="1"/>'
-                         % (X(float(e[5])), Y(float(e[7])),
-                            X(float(e[11])), Y(float(e[13]))))
-        elif e[1] == "CIRCLE":
-            parts.append('<circle cx="%.1f" cy="%.1f" r="%.1f" fill="none" '
-                         'stroke="#1c1c1c" stroke-width="1"/>'
-                         % (X(float(e[5])), Y(float(e[7])), float(e[11]) * sc))
-    return ('<svg viewBox="0 0 %d %d" style="width:100%%;background:#fff;'
-            'border:1px solid #e6e8ee;border-radius:10px">' % (W, H)
-            + "".join(parts) + "</svg>")
 
 
 def list_blocks():
@@ -413,25 +304,28 @@ HTML = r"""<!doctype html>
     <span class="logo">SC</span>
     <h1 style="flex:0 0 auto">Single-CAD</h1>
     <div style="flex:1 1 320px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end">
+      <select id="langSel" onchange="setLang(this.value)" title="中文 / English"
+              style="padding:5px 10px;font-size:13px">
+        <option value="zh">中文</option>
+        <option value="en">English</option>
+      </select>
       <span id="verTxt">版本 {{VER}}（{{VERNOTE}}）</span>
       <button class="ghost" id="updBtn" onclick="checkUpdate()"
               style="padding:5px 12px;font-size:13px">检查更新</button>
       <span id="updMsg"></span>
     </div>
   </div>
-  <div class="sub">选块（可重复）→ 组成链 → 生成连完线的产品
-    · 代码版本 {{VER}}（换过代码要重启窗口，否则跑的还是旧代码）</div>
+  <div class="sub">选块（可重复）→ 组成链 → 生成连完线的产品 · 代码版本 {{VER}}（换过代码要重启窗口，否则跑的还是旧代码）</div>
 </header>
 <div class="wrap">
   <div class="panel"><h2>① 块库（点击加入链）</h2>
     <div class="grid" id="blocks"></div></div>
-  <div class="panel"><h2>② 链（按顺序摆放并连线）</h2>
+  <div class="panel"><h2>② 线束（可以不填：留空自动排“末端母头 + 正极支线×(串数-1) + 末端公头”；想带保险丝等串联块就把块点上来）</h2>
     <div class="chain" id="chain"><span style="color:#aab">点左边块加入…</span></div>
     <div class="row">
       <label>模式</label>
-      <label><input type="radio" name="mode" value="chain" checked onchange="setMode('chain')"> 单个链</label>
-      <label><input type="radio" name="mode" value="array" onchange="setMode('array')"> 光伏阵列 + 线束</label>
-      <label><input type="radio" name="mode" value="batch" onchange="setMode('batch')"> 批量（一行一张·逐张独立）</label>
+      <label><input type="radio" name="mode" value="array" checked onchange="setMode('array')"> 光伏阵列 + 线束（一张图）</label>
+      <label><input type="radio" name="mode" value="batch" onchange="setMode('batch')"> 批量（一行一张 · 全部拼进同一张图纸）</label>
     </div>
     <div class="row" id="arrayRow" style="display:none">
       <label>组件 首块</label><select id="mod1"></select>
@@ -448,8 +342,23 @@ HTML = r"""<!doctype html>
       <label><input type="checkbox" id="hspan" checked> 线束接点对齐缩放</label>
       <label>正极支线块</label><select id="posfeed"><option value="">（选链里的块）</option></select>
       <label>负极支线块</label><select id="negfeed"><option value="">（不指定）</option></select>
-      <label>主线线号</label><input type="text" id="awgmain" value="2/0 AWG" style="width:100px">
-      <label>支线线号</label><input type="text" id="awgbranch" value="6 AWG" style="width:100px">
+      <label>主线线号</label><select id="awgmain" style="width:110px"
+        title="主线上标的线号（标在块与块之间的连线上）；按载流量选：线越长、串数越多用越粗的">
+        <option>750 MCM</option>
+        <option>500 MCM</option>
+        <option selected>2/0 AWG</option>
+        <option>4 AWG</option>
+        <option>6 AWG</option>
+        <option>8 AWG</option>
+        <option>10 AWG</option>
+        <option value="">（不指定）</option>
+      </select>
+      <label>支线线号</label><select id="awgbranch" style="width:100px"
+        title="支线线号（板与板之间不标字，只写进线长清单 CSV）">
+        <option selected>10 AWG</option>
+        <option>12 AWG</option>
+        <option value="">（不指定）</option>
+      </select>
       <label>线号标注</label><select id="annot"
         title="text=普通文字（最稳）；shape=画成标注外观（尺寸线/界线/箭头，普通实体，任何 CAD 都能开）；dim=CAD 原生 DIMENSION（可拖动关联，但 ZWCAD 2025 会判无效）">
         <option value="text">文字</option>
@@ -469,9 +378,33 @@ HTML = r"""<!doctype html>
       <label>末端母头块</label><input type="text" id="negplug" value="Fmale" style="width:80px"
              title="填了才会自动生成负极那一行（头部公头 + 中间负极支线 + 末端母头）">
       <label><input type="checkbox" id="enlarge"> 允许放大到占满</label>
-      <label>保留手工层</label><select id="keepfrom"><option value="">不保留</option></select>
       <label><input type="checkbox" id="tocad"> 直接画到 CAD(COM)</label>
-      <label><input type="checkbox" id="cadorig"> 画在原外框文件上（默认画副本）</label>
+    </div>
+    <div class="row" id="bhaRow" style="display:none;flex-direction:column;align-items:stretch">
+      <div class="row" style="margin-top:0;align-items:center;gap:8px">
+        <b>电机 / BHA 桩位置</b>
+        <button class="ghost" onclick="addBha()">加一处</button>
+        <button class="ghost" onclick="addBhaMid()" title="每串都在中间那块之后插一处（位置 = 每串板数 ÷ 2，四舍五入）">每串中点插一处</button>
+        <button class="ghost" onclick="clearBha()">清空</button>
+        <span style="font-size:12px;color:var(--muted)">
+          在某一串的两块板之间插一个 BHA 桩块（可以再放一个电机块）；桩右边的板整体右移，
+          阵列自动变长、线束支线跟着走。串号留空 = 所有串。</span>
+      </div>
+      <div style="max-height:190px;overflow:auto;border:1px solid var(--line);border-radius:8px">
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead><tr>
+            <th style="text-align:left;padding:6px">串号</th>
+            <th style="text-align:left;padding:6px">插在第几块之后</th>
+            <th style="text-align:left;padding:6px">BHA 桩块</th>
+            <th style="text-align:left;padding:6px">电机块</th>
+            <th style="text-align:left;padding:6px">电机旋转</th>
+            <th style="text-align:left;padding:6px">桩左净空</th>
+            <th style="text-align:left;padding:6px">桩右净空</th>
+            <th style="text-align:left;padding:6px">备注</th><th></th>
+          </tr></thead>
+          <tbody id="bhaBody"></tbody>
+        </table>
+      </div>
     </div>
     <div class="row" id="batchRow" style="display:none;flex-direction:column;align-items:stretch">
       <div class="row" style="margin-top:0">
@@ -490,26 +423,33 @@ HTML = r"""<!doctype html>
             <th style="text-align:left;padding:6px">外框图</th>
             <th style="text-align:left;padding:6px">串数</th>
             <th style="text-align:left;padding:6px">每串板数</th>
+            <th style="text-align:left;padding:6px">主线线号</th>
+            <th style="text-align:left;padding:6px">支线线号</th>
+            <th style="text-align:left;padding:6px">BHA位置</th>
             <th style="text-align:left;padding:6px">备注</th><th></th>
           </tr></thead>
           <tbody id="bBody"></tbody>
         </table>
       </div>
       <div class="row" style="margin-top:0">
-        <button onclick="genBatch()">生成全部（每行一张）</button>
-        <span style="font-size:12px;color:var(--muted)">
-          一行 = 一张图：每张都重新调一次外框模板，参数互不影响。
-          左侧块链和上面那套间距/标注/支线块是各行的公共参数。</span>
+        <button onclick="genBatch()" id="batchGo">生成（全部拼进同一张图纸）</button>
+        <span style="font-size:12px;color:var(--muted)">一行 = 一张图：每张都调一份新的外框模板（互相独立），
+          全部排进同一个 DXF；在 CAD 里每张是一个整块（块名 = 图号），想挪就整块挪。</span>
       </div>
+    </div>
+    <div class="row" id="sheetRow" style="display:none">
+      <label>每行放</label><input type="number" id="sheetc" value="2" min="1" max="20" step="1" style="width:60px">
+      <label>图间距 X</label><input type="number" id="sheetgx" value="300" step="50" style="width:80px">
+      <label>图间距 Y</label><input type="number" id="sheetgy" value="300" step="50" style="width:80px">
+      <label>排法</label><select id="sheetorder" style="max-width:260px">
+        <option value="row">先横后竖（左→右，然后下一行）</option>
+        <option value="col">先竖后横（上→下，然后下一列）</option>
+      </select>
     </div>
     <div class="row">
       <label>间隔 GAP</label><input type="number" id="gap" value="40" step="5">
-      <span class="chainOnly"><label>占框比例%</label><input type="number" id="fit" value="55" step="5" min="10" max="100"></span>
-      <span class="chainOnly"><label><input type="checkbox" id="match" checked> 自动缩放对齐接点</label></span>
-      <span class="chainOnly"><label><input type="checkbox" id="showlen" checked> 标注线长</label></span>
-      <span class="chainOnly"><label><input type="checkbox" id="raw" checked> 不展平(保留原始实体)</label></span>
       <label>外框图</label><select id="frame" onchange="onFrameChange()"><option value="">不用</option></select>
-      <button onclick="gen()">生成连线</button>
+      <button onclick="gen()">生成</button>
       <button class="ghost" onclick="clearChain()">清空</button>
     </div>
     <div class="out" id="out"></div>
@@ -524,23 +464,119 @@ HTML = r"""<!doctype html>
   </div>
 </div>
 <script>
+// ==================== 中英文切换 ====================
+// 程序和 HTML 里写的都是中文；英文按“中文原句”查表翻。表在 i18n.py 里，
+// 页面加载时由服务端注入成 EN_TEXT。表里没有的原样显示 —— 少写一条也不会坏。
+let LANG='{{LANG}}';
+const EN_TEXT={{I18N_EN}};
+const _ZH=/[\u4e00-\u9fff]/;
+let _rules=null;
+const _zhText=new WeakMap(), _zhAttr=new WeakMap();
+function _escRe(s){return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');}
+function _buildRules(){
+  _rules=[];
+  const spec=/%(?:[-+ #0]*\d*(?:\.\d+)?[diouxXeEfFgGscr])/g;
+  Object.keys(EN_TEXT).forEach(function(k){
+    if(k.indexOf('%')<0) return;                      // 没有占位符的走精确匹配
+    const parts=k.replace(/%%/g,'\u0000').split(spec);
+    const pat='^'+parts.map(_escRe).join('(.*?)').replace(/\u0000/g,'%')+'$';
+    _rules.push({re:new RegExp(pat,'s'), en:EN_TEXT[k]});
+  });
+  // 长的先试：不然“线束缩放: %s”会先把“线束缩放: %s（…）”那句截胡
+  _rules.sort(function(a,b){return b.re.source.length-a.re.source.length;});
+}
+// 翻一句：整句匹配；带换行的按行翻；没中文的直接还回去。翻不出来返回 null
+function _T1(s,d){
+  if(_rules===null) _buildRules();
+  if(EN_TEXT[s]!==undefined) return EN_TEXT[s];
+  for(let i=0;i<_rules.length;i++){
+    const m=_rules[i].re.exec(s);
+    if(!m) continue;
+    let n=0;
+    return _rules[i].en.replace(/\{(\d*)\}/g,function(_,idx){
+      const gi=(idx==='')?(n++):parseInt(idx);
+      const raw=m[gi+1];
+      if(raw===undefined) return '';
+      return (d<2)?T(raw,d+1):raw;    // 参数里还有中文（“第 1/3 张 · 准备”）就接着翻
+    });
+  }
+  return null;
+}
+function T(s,depth){
+  if(LANG==='zh'||s==null) return s;
+  s=String(s);
+  if(s.indexOf('\n')>=0) return s.split('\n').map(function(x){return T(x,depth);}).join('\n');
+  if(!_ZH.test(s)) return s;
+  const d=depth||0;
+  let out=_T1(s,d);
+  if(out!==null) return out;
+  const t=s.trim();                    // HTML 排版留下的缩进/空格：去掉空白再试一次
+  if(t && t!==s){
+    out=_T1(t,d);
+    if(out!==null) return s.replace(t,out);
+  }
+  return s;                            // 表里没有：保持中文，不乱改
+}
+// 把一段 DOM 的文字和悬停提示按当前语言刷一遍（记下原中文，切回来能还原）
+const _SKIP={SCRIPT:1,STYLE:1,SVG:1,TEXTAREA:1};
+function RT(root){
+  root=root||document.body;
+  if(!root) return;
+  function doText(n){
+    const p=n.parentNode;
+    if(!p||_SKIP[p.nodeName]) return;
+    let zh=_zhText.get(n);
+    if(zh===undefined){ zh=n.nodeValue; _zhText.set(n,zh); }
+    const want=(LANG==='en')?T(zh):zh;
+    if(n.nodeValue!==want) n.nodeValue=want;
+  }
+  function doElem(e){
+    if(_SKIP[e.nodeName]) return;
+    if(e.hasAttribute){
+      ['title','placeholder'].forEach(function(a){
+        if(!e.hasAttribute(a)) return;
+        let box=_zhAttr.get(e);
+        if(!box){ box={}; _zhAttr.set(e,box); }
+        if(box[a]===undefined) box[a]=e.getAttribute(a);
+        const want=(LANG==='en')?T(box[a]):box[a];
+        if(e.getAttribute(a)!==want) e.setAttribute(a,want);
+      });
+    }
+    if(e===document.getElementById('langSel')) return;   // 语言下拉自己不翻
+    for(let c=e.firstChild;c;c=c.nextSibling){
+      if(c.nodeType===3) doText(c);
+      else if(c.nodeType===1) doElem(c);
+    }
+  }
+  if(root.nodeType===3) doText(root);
+  else if(root.nodeType===1) doElem(root);
+}
+function setLang(v){
+  LANG=(v==='en')?'en':'zh';
+  const sel=document.getElementById('langSel');
+  if(sel) sel.value=LANG;
+  document.documentElement.lang=(LANG==='en')?'en':'zh';
+  RT(document.body);
+  try{ fetch('/api/lang?set='+LANG); }catch(e){}       // 记住选择，下次开窗还是这个语言
+}
+
 let chain=[];
 let lastOut={dxf:'', csv:''};   // 最近一次生成的文件名（桌面窗口的“保存/打开”要用）
 let framesReady=false;
 let lastBlocks=[];      // 块库里所有块名（给“正极/负极支线块”下拉用）
-let mode='chain';
+let mode='array';
 let frameList=[];       // 外框图列表（批量模式的外框图下拉要用）
 let batchRows=[];       // 批量模式：一行 = 一张图（各自独立参数）
+let bhaRows=[];         // 电机/BHA 桩：一行 = 一处插入（串号 / 第几块之后 / 桩块 / 电机块 …）
+const AWG_MAIN=['750 MCM','500 MCM','2/0 AWG','4 AWG','6 AWG','8 AWG','10 AWG'];
+const AWG_BRANCH=['10 AWG','12 AWG'];
 function setMode(m){
-  mode=m;
-  const arr=(m==='array'||m==='batch');
-  document.getElementById('arrayRow').style.display=arr?'flex':'none';
-  document.getElementById('batchRow').style.display=(m==='batch')?'flex':'none';
-  document.querySelectorAll('.chainOnly').forEach(e=>{e.style.display=arr?'none':''});
-  document.querySelectorAll('h2')[1].textContent=(m==='chain')
-    ? '② 链（按顺序摆放并连线）'
-    : ('② 线束（可以不填：留空自动排“末端母头 + 正极支线×(串数-1) + 末端公头”；'
-       + '想带保险丝等串联块就把块点上来）');
+  mode=(m==='batch')?'batch':'array';
+  document.getElementById('arrayRow').style.display='flex';
+  document.getElementById('bhaRow').style.display='flex';
+  document.getElementById('batchRow').style.display=(mode==='batch')?'flex':'none';
+  document.getElementById('sheetRow').style.display=(mode==='batch')?'flex':'none';
+  RT();
 }
 async function loadBlocks(){
   const fs=document.getElementById('frame');
@@ -561,13 +597,9 @@ async function loadBlocks(){
     const want=[...ms.options].find(o=>o.value===def);
     if(want) ms.value=def;
   });
-  const kf=document.getElementById('keepfrom');
-  if(kf && !kf.dataset.filled){
-    (d.out_files||[]).forEach(f=>{ const o=document.createElement('option'); o.value=f; o.textContent=f; kf.appendChild(o); });
-    kf.dataset.filled='1';
-  }
   const g=document.getElementById('blocks'); g.innerHTML='';
   lastBlocks=(d.blocks||[]).map(b=>b.name);
+  renderBha();                      // BHA 桩块/电机块下拉从整个块库里选
   d.blocks.forEach(b=>{
     const c=document.createElement('div'); c.className='bcard';
     const badge=(b.src==='lib')?'<span class="badge" title="来自块库，生成时自动并入外框">库</span>':'';
@@ -575,6 +607,7 @@ async function loadBlocks(){
     c.onclick=()=>{chain.push(b.name); renderChain();};
     g.appendChild(c);
   });
+  RT();
 }
 function onFrameChange(){ chain=[]; renderChain(); loadBlocks(); }
 function renderChain(){
@@ -602,6 +635,7 @@ function renderChain(){
     else if(id==='posfeed' && lib.includes('POS')) s.value='POS';
     else if(id==='negfeed' && lib.includes('NEG')) s.value='NEG';
   });
+  RT();
 }
 function clearChain(){chain=[];renderChain();document.getElementById('out').innerHTML='';}
 // 取输入值：元素不存在（多半是浏览器缓存了旧页面）就返回默认值，绝不抛错
@@ -612,6 +646,7 @@ function progStart(txt){
   document.getElementById('progWrap').style.display='block';
   document.getElementById('progBar').style.width='0%';
   document.getElementById('progTxt').textContent=txt||'开始…';
+  RT(document.getElementById('progWrap'));
   const _pl=document.getElementById('progLog');
   if(_pl){_pl.style.display='none';_pl.textContent='';}
   if(progTimer) clearInterval(progTimer);
@@ -626,6 +661,7 @@ function progStart(txt){
         lg.textContent=d.tail.join('\n');
         lg.scrollTop=lg.scrollHeight;
       }
+      RT(document.getElementById('progWrap'));
     }catch(e){}
   },200);
 }
@@ -634,6 +670,7 @@ function progStop(finalText){
   document.getElementById('progBar').style.width='100%';
   document.getElementById('progTxt').textContent=finalText||'完成';
   setTimeout(()=>{document.getElementById('progWrap').style.display='none';},1500);
+  RT(document.getElementById('progWrap'));
 }
 // 阵列模式的一组公共参数（阵列模式与批量模式共用；批量模式每行再覆盖串数/板数）
 function arrayCommon(){
@@ -663,7 +700,72 @@ function arrayCommon(){
           awg_main:document.getElementById('awgmain').value.trim(),
           awg_branch:document.getElementById('awgbranch').value.trim(),
           annot:(document.getElementById('annot')||{}).value||'text',
-          allow_enlarge:document.getElementById('enlarge').checked};
+          allow_enlarge:document.getElementById('enlarge').checked,
+          bha:bhaPayload()};
+}
+
+// ---------- 电机 / BHA 桩位置（一行 = 一处插入） ----------
+// 在某一串的两块板之间插一个 BHA 桩块（可以再挂一个电机块）：桩右边的板整体右移、
+// 阵列自动变长（位移 = 桩宽 + 左净空 + 右净空 - 板间净空）。生成时按结构化的行送给后端。
+function addBha(s,after,stub,motor,rot,gl,gr,note){
+  bhaRows.push({s:(s===undefined?'':String(s)),
+                after:(after===undefined?'':String(after)),
+                stub:stub||'', motor:motor||'',
+                rot:(rot===undefined?'':String(rot)),
+                gap_l:(gl===undefined?'':String(gl)),
+                gap_r:(gr===undefined?'':String(gr)), note:note||''});
+  renderBha();
+}
+function addBhaMid(){                    // 每串中点插一处（给个下手的地方）
+  const nper=parseInt(document.getElementById('nper').value)||20;
+  addBha('', Math.max(1,Math.round(nper/2)), '', '', 0);
+}
+function clearBha(){ bhaRows=[]; renderBha(); }
+function bhaPayload(){
+  return bhaRows.map(r=>({s:r.s, after:r.after, stub:r.stub, motor:r.motor,
+                          rot:r.rot, gap_l:r.gap_l, gap_r:r.gap_r}))
+                .filter(r=>(r.stub||r.motor));      // 空行不送
+}
+function renderBha(){
+  const tb=document.getElementById('bhaBody'); if(!tb) return;
+  tb.innerHTML='';
+  bhaRows.forEach((r,i)=>{
+    const tr=document.createElement('tr'); tr.style.borderTop='1px solid var(--line)';
+    const td=()=>{const c=document.createElement('td');c.style.padding='4px';tr.appendChild(c);return c;};
+    let c=td(), e=document.createElement('input');
+    e.type='text'; e.value=r.s; e.placeholder='全部';
+    e.title='串号：留空=所有串；也可以写 1,3 或 2-4';
+    e.style.width='70px'; e.oninput=()=>{r.s=e.value;}; c.appendChild(e);
+    c=td(); e=document.createElement('input'); e.type='number'; e.min='0'; e.step='1';
+    e.value=r.after; e.title='插在第几块之后：0=第 1 块之前；填得比每串板数大就排到最后';
+    e.style.width='90px'; e.oninput=()=>{r.after=e.value;}; c.appendChild(e);
+    [['stub','（桩块）'],['motor','（不带电机）']].forEach(function(pair){
+      const key=pair[0], blank=pair[1];
+      const cc=td(); const s=document.createElement('select'); s.style.maxWidth='150px';
+      const o0=document.createElement('option'); o0.value=''; o0.textContent=blank; s.appendChild(o0);
+      (lastBlocks||[]).forEach(function(n){
+        const o=document.createElement('option'); o.value=n; o.textContent=n; s.appendChild(o); });
+      if(r[key] && (lastBlocks||[]).indexOf(r[key])<0){
+        const o=document.createElement('option'); o.value=r[key]; o.textContent=r[key]; s.appendChild(o); }
+      s.value=r[key]||''; s.onchange=()=>{r[key]=s.value;}; cc.appendChild(s);
+    });
+    c=td(); e=document.createElement('input'); e.type='number'; e.step='90';
+    e.value=r.rot; e.title='电机块绕插入点转多少度（0 / 90 / 180 / 270）';
+    e.style.width='70px'; e.oninput=()=>{r.rot=e.value;}; c.appendChild(e);
+    [['gap_l','跟随板间净空'],['gap_r','跟随板间净空']].forEach(function(pair){
+      const key=pair[0], ph=pair[1];
+      const cc=td(); const ee=document.createElement('input'); ee.type='number'; ee.step='1';
+      ee.value=r[key]; ee.placeholder=ph;
+      ee.title='桩这一侧的净空；留空=跟随“板间净空”';
+      ee.style.width='80px'; ee.oninput=()=>{r[key]=ee.value;}; cc.appendChild(ee);
+    });
+    c=td(); e=document.createElement('input'); e.type='text';
+    e.value=r.note||''; e.style.width='100%'; e.oninput=()=>{r.note=e.value;}; c.appendChild(e);
+    c=td(); const b=document.createElement('button'); b.className='ghost'; b.textContent='删';
+    b.onclick=()=>{bhaRows.splice(i,1);renderBha();}; c.appendChild(b);
+    tb.appendChild(tr);
+  });
+  RT(document.getElementById('bhaRow'));
 }
 
 // ---------- 批量（一行 = 一张图，逐张独立） ----------
@@ -680,7 +782,8 @@ function fillBatch(){
   batchRows=[];
   for(let i=0;i<cnt;i++){
     batchRows.push({no:pre+pad3(n0+i), frame:fr,
-                    n_str:Math.max(1,s0+i*step), n_per:np, note:''});
+                    n_str:Math.max(1,s0+i*step), n_per:np, note:'',
+                    awg_main:'', awg_branch:'', bha:''});   // 留空 = 沿用上面那套
   }
   renderBatch();
 }
@@ -699,69 +802,71 @@ function renderBatch(){
     e.value=r.n_str; e.style.width='70px'; e.oninput=()=>{r.n_str=parseInt(e.value)||1;}; c.appendChild(e);
     c=td(); e=document.createElement('input'); e.type='number'; e.min='1';
     e.value=r.n_per; e.style.width='70px'; e.oninput=()=>{r.n_per=parseInt(e.value)||1;}; c.appendChild(e);
+    // 每张图自己的线号：留空 = 沿用上面“主线线号/支线线号”那套
+    [['awg_main',AWG_MAIN],['awg_branch',AWG_BRANCH]].forEach(([key,opts])=>{
+      c=td(); const s=document.createElement('select'); s.style.width='96px';
+      const o0=document.createElement('option'); o0.value=''; o0.textContent='（同上）'; s.appendChild(o0);
+      opts.forEach(w=>{const o=document.createElement('option'); o.value=w; o.textContent=w; s.appendChild(o);});
+      s.value=r[key]||''; s.onchange=()=>{r[key]=s.value;}; c.appendChild(s);
+    });
+    // 这一张图自己的 BHA 桩/电机位置：留空 = 沿用上面那张表
+    c=td(); e=document.createElement('input'); e.type='text';
+    e.value=r.bha||''; e.placeholder='同上';
+    e.title='写法：串号:第几块之后:桩块:电机块:旋转:左净空:右净空，多处用 ; 隔开；' +
+            '例 全部:10:BHA:MOTOR:0 或 2:5:BHA:MOTOR:90;4:12:BHA。留空 = 沿用上面那张 BHA 表';
+    e.style.width='190px'; e.oninput=()=>{r.bha=e.value;}; c.appendChild(e);
     c=td(); e=document.createElement('input'); e.type='text';
     e.value=r.note||''; e.style.width='100%'; e.oninput=()=>{r.note=e.value;}; c.appendChild(e);
     c=td(); const b=document.createElement('button'); b.className='ghost'; b.textContent='删';
     b.onclick=()=>{batchRows.splice(i,1);renderBatch();}; c.appendChild(b);
     tb.appendChild(tr);
   });
+  RT(document.getElementById('batchRow'));
 }
 async function genBatch(){
-  if(!batchRows.length){ alert('还没有要画的图：先填份数，点“按上面参数铺出 N 行”'); return; }
+  if(!batchRows.length){ alert(T('还没有要画的图：先填份数，点“按上面参数铺出 N 行”')); return; }
   const frame0=document.getElementById('frame').value||'';
-  if(!batchRows.some(r=>r.frame||frame0)){ alert('批量模式要先选外框图'); return; }
+  if(!batchRows.some(r=>r.frame||frame0)){ alert(T('批量模式要先选外框图')); return; }
   document.getElementById('out').innerHTML='生成中…';
+  RT(document.getElementById('out'));
   progStart('提交…');
   const body=arrayCommon();
   body.frame=frame0; body.rows=batchRows;
-  body.keep_from=document.getElementById('keepfrom').value;
+  body.cols=parseInt(v('sheetc',2))||2;
+  body.gap_sheet_x=parseFloat(v('sheetgx',300))||0;
+  body.gap_sheet_y=parseFloat(v('sheetgy',300))||0;
+  body.order=(document.getElementById('sheetorder')||{}).value||'row';
   body.to_cad=document.getElementById('tocad').checked;
-  body.cad_original=document.getElementById('cadorig').checked;
+  body.cad_original=false;          // 画到 CAD 一律画副本，不动外框原文件
   const r=await fetch('/api/generate_batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const d=await r.json();
   progStop('完成');
-  const fl=d.files||[];
-  lastOut={dxf:(fl[0]?fl[0].name:''), csv:''};
-  const rowsHtml=fl.map(f=>
-      '<div class="dlrow"><b style="min-width:110px">'+f.no+'</b>'+
-      '<button class="ghost" onclick="fileAct(\'open\',\''+f.name+'\')">用CAD打开</button> '+
-      '<button class="ghost" onclick="fileAct(\'export\',\''+f.name+'\')">DXF存桌面</button> '+
-      (f.csv_url?('<button class="ghost" onclick="fileAct(\'export\',\''+f.csv+'\')">CSV存桌面</button> '):'')+
-      (f.url?('<a class="dl" href="'+f.url+'" download>下载DXF</a> '):'')+
-      (f.csv_url?('<a class="dl" href="'+f.csv_url+'" download>下载CSV</a>'):'')+
-      '</div>').join('');
+  lastOut={dxf:d.dxf_name||'', csv:d.csv_name||''};
   document.getElementById('out').innerHTML =
-    '<div class="dlrow"><b>共 '+(d.total||fl.length)+' 张，成功 '+fl.length+' 张</b>'+
-      (d.zip_url?('<a class="dl" href="'+d.zip_url+'" download>下载全部(zip)</a> '):'')+
-      '<button class="ghost" onclick="fileAct(\'reveal\')">打开输出文件夹</button>'+
-      '<span id="fileMsg" style="font-size:12px;color:var(--muted);margin-left:8px"></span></div>'+
-    rowsHtml+'<div id="log">'+(d.log||[]).join('\n')+'</div>';
+    (d.svg||'') +
+    '<div class="dlrow"><b>'+((d.sheets||[]).length)+' 张拼进同一张图纸</b> ' +
+      '<button class="ghost" onclick="fileAct(\'open\')">用默认程序打开(DXF)</button> ' +
+      '<button class="ghost" onclick="fileAct(\'export\')">保存到桌面</button> ' +
+      '<button class="ghost" onclick="fileAct(\'reveal\')">打开输出文件夹</button> ' +
+      (d.csv_url?('<button class="ghost" onclick="fileAct(\'export\',lastOut.csv)">线长清单存到桌面</button> '):'') +
+      (d.dxf_url?('<a class="dl" href="'+d.dxf_url+'" download>下载 DXF</a> '):'') +
+      '<span id="fileMsg" style="font-size:12px;color:var(--muted);margin-left:8px"></span></div>' +
+    '<div id="log">'+(d.log||[]).join('\n')+'</div>';
+  RT(document.getElementById('out'));
 }
 
 async function gen(){
-  if(mode==='array' && !document.getElementById('frame').value){alert('阵列模式必须先选外框图');return;}
   if(mode==='batch'){ return genBatch(); }
-  if(!chain.length && mode==='chain'){alert('先选块');return;}
+  if(!document.getElementById('frame').value){alert(T('阵列模式必须先选外框图'));return;}
   document.getElementById('log') && (document.getElementById('log').textContent='');
   document.getElementById('out').innerHTML='生成中…';
+  RT(document.getElementById('out'));
   progStart('提交…');
-  const gap=parseFloat(document.getElementById('gap').value)||40;
-  let url='/api/generate';
-  let body={chain:chain, gap:gap,
-              fit:(parseFloat(document.getElementById('fit').value)||55)/100.0,
-              match_span:document.getElementById('match').checked,
-              show_len:document.getElementById('showlen').checked,
-              raw:document.getElementById('raw').checked,
-              frame:document.getElementById('frame').value};
-  if(mode==='array'){
-    url='/api/generate_array';
-    body=arrayCommon();
-    body.frame=document.getElementById('frame').value;
-    body.keep_from=document.getElementById('keepfrom').value;
-    body.to_cad=document.getElementById('tocad').checked;
-    body.cad_original=document.getElementById('cadorig').checked;
-  }
-  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const body=arrayCommon();
+  body.frame=document.getElementById('frame').value;
+  body.to_cad=document.getElementById('tocad').checked;
+  body.cad_original=false;        // 画到 CAD 一律画副本，不动外框原文件
+  const r=await fetch('/api/generate_array',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const d=await r.json();
   progStop('完成');
   const dxf=(d.dxf_file||'').split(/[\\/]/).pop();
@@ -779,6 +884,7 @@ async function gen(){
       '<span id="fileMsg" style="font-size:12px;color:var(--muted);margin-left:8px"></span>' +
     '</div>' +
     '<div id="log">'+(d.log||[]).join('\n')+'</div>';
+  RT(document.getElementById('out'));
 }
 // 打包成桌面窗口时，<a download> 点了没反应（WebView2 不弹下载框），
 // 所以窗口里改用程序自己的保存/打开能力；浏览器模式还走原来的下载链接。
@@ -787,20 +893,22 @@ function inApp(){ return !!(window.pywebview && window.pywebview.api); }
 async function fileAct(act, name){
   const f = name || lastOut.dxf;
   const box = document.getElementById('fileMsg');
-  if(!f){ if(box) box.textContent='还没有生成文件'; return; }
-  if(box) box.textContent='处理中…';
+  if(!f){ if(box) box.textContent=T('还没有生成文件'); return; }
+  if(box) box.textContent=T('处理中…');
   try{
     const r = await fetch('/api/file/'+act+'?name='+encodeURIComponent(f));
     const d = await r.json();
     if(box) box.textContent = (d.ok? '✓ ' : '✗ ') +
       (act==='export' ? ('已保存到 ' + d.msg) : (act==='reveal' ? '已在文件夹里定位' : d.msg));
   }catch(e){ if(box) box.textContent='✗ '+e; }
+  if(box) RT(box);
 }
 loadBlocks();
-setMode('chain');
+setMode('array');
+setLang(LANG);          // 按上次选的语言把界面刷一遍（默认中文，等于没改）
 
 // ---------- 在线更新 ----------
-function updMsg(t,color){const e=document.getElementById('updMsg');e.textContent=t;e.style.color=color||'';}
+function updMsg(t,color){const e=document.getElementById('updMsg');e.textContent=t;e.style.color=color||'';RT(e);}
 async function checkUpdate(apply){
   const b=document.getElementById('updBtn'); b.disabled=true; updMsg('检查中…');
   try{
@@ -810,13 +918,14 @@ async function checkUpdate(apply){
     else if(d.newer) updMsg('发现新版本 '+d.remote+'（当前 '+d.local+'）','#fff3c4');
     else updMsg('已是最新（'+d.local+'）','#c8f7d0');
     if(d.newer && !apply){
-      if(confirm('发现新版本 '+d.remote+'（当前 '+d.local+'）\n'+(d.notes||'')+'\n\n现在下载更新吗？\n（下载完关掉窗口重新打开即生效）')){
+      if(confirm(T('发现新版本 '+d.remote+'（当前 '+d.local+'）\n'+(d.notes||'')+'\n\n现在下载更新吗？\n（下载完关掉窗口重新打开即生效）'))){
         return checkUpdate(true);
       }
     }
     if(d.applied){
       document.getElementById('verTxt').textContent='版本 '+d.remote+'（已下载，重启生效）';
-      alert('更新已下载完成。\n\n请关掉本窗口，重新双击程序即生效。');
+      RT(document.getElementById('verTxt'));
+      alert(T('更新已下载完成。\n\n请关掉本窗口，重新双击程序即生效。'));
     }
   }catch(e){ updMsg('✗ 网络错误：'+e,'#ffd7d7'); }
   finally{ b.disabled=false; }
@@ -855,6 +964,7 @@ def array_spec(req, over=None):
                 annot=req.get("annot", "text"),
                 neg_rotate=req.get("neg_rotate", 0.0),
                 neg_gap=req.get("neg_gap", 30.0),
+                bha=req.get("bha", []),
                 allow_enlarge=bool(req.get("allow_enlarge")),
                 keep_from=(os.path.join(OUTDIR, os.path.basename(req["keep_from"]))
                            if req.get("keep_from") else ""))
@@ -941,6 +1051,15 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/api/progress"):
             self._send(200, json.dumps(PROGRESS).encode("utf-8"), "application/json")
             return
+        if self.path.startswith("/api/lang"):
+            # 界面切中英文时调一下，把选择记下来（下次开窗口还是这个语言）
+            from urllib.parse import parse_qs
+            q = parse_qs(self.path.split("?", 1)[1]) if "?" in self.path else {}
+            lang = (i18n.set_pref((q.get("set") or [""])[0]) if q.get("set")
+                    else i18n.get_pref())
+            self._send(200, json.dumps({"ok": True, "lang": lang}).encode("utf-8"),
+                       "application/json")
+            return
         if self.path.startswith("/api/update"):
             self._api_update(self.path)
             return
@@ -993,8 +1112,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(404, b"not found")
         else:
             _v, _vn = app_version()
-            self._send(200, HTML.replace("{{VER}}", _v).replace("{{VERNOTE}}", _vn)
-                       .encode("utf-8"))
+            lang = i18n.get_pref()
+            if "?" in self.path:                 # 临时看另一种语言：http://127.0.0.1:8770/?lang=en
+                from urllib.parse import parse_qs   # （只影响这一次打开，不改变记住的设置）
+                want = (parse_qs(self.path.split("?", 1)[1]).get("lang") or [""])[0].strip().lower()
+                if want in i18n.LANGS:
+                    lang = want
+            page = (HTML.replace("{{VER}}", _v).replace("{{VERNOTE}}", _vn)
+                        .replace("{{LANG}}", lang)
+                        .replace("{{I18N_EN}}", i18n.js_table()))
+            self._send(200, page.encode("utf-8"))
 
     def do_POST(self):
         try:
@@ -1011,65 +1138,14 @@ class Handler(BaseHTTPRequestHandler):
             ).encode("utf-8"), "application/json")
 
     def _do_post(self):
+        # 只有两种出图方式：生成 DXF（阵列一张 / 批量拼一张），
+        # 勾了“直接画到 CAD(COM)”时再顺带用 COM 画进 CAD。
         if self.path == "/api/generate_array":
             self._generate_array(); return
         if self.path == "/api/generate_batch":
             self._generate_batch(); return
-        if self.path != "/api/generate":
-            self._send(404, b"not found"); return
-        ln = int(self.headers.get("Content-Length", 0))
-        req = json.loads(self.rfile.read(ln).decode("utf-8"))
-        chain = req.get("chain", [])
-        gap = float(req.get("gap", 40))
-        try:
-            fit = min(max(float(req.get("fit", 0.55)), 0.05), 1.0)
-        except (TypeError, ValueError):
-            fit = 0.55
-        match = bool(req.get("match_span", True))
-        show_len = bool(req.get("show_len", True))
-        raw = bool(req.get("raw", True))
-        frame_name = req.get("frame", "") or ""
-        frame_path = os.path.join(FRAMES_DIR, frame_name) if frame_name else None
-        if frame_path:
-            # 选了外框图：块来自外框，输出=外框字节+内容插入；不做展平预览
-            text, log = wr.build_chain_frame(frame_path, chain, gap, match, show_len, fit)
-            if not text:
-                self._send(200, json.dumps({"svg": "", "log": log}).encode("utf-8"),
-                           "application/json"); return
-            content = text
-            svg = ""
-        else:
-            dxf, log = build_chain(chain, gap, match, show_len)
-            if dxf is None:
-                self._send(200, json.dumps({"svg": "", "log": log}).encode("utf-8"),
-                           "application/json"); return
-            svg = dxf_to_svg(dxf)
-            if not raw:
-                content = dxf.build({"title": "WIRING"})
-            else:
-                text, rlog, rent = wr.build_chain_raw(chain, gap, match, show_len)
-                if text:
-                    content = text
-                    log = rlog
-                    svg = wr.entities_to_svg(rent)
-                else:
-                    content = dxf.build({"title": "WIRING"})
-        os.makedirs(OUTDIR, exist_ok=True)
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        fn = "wiring_%s.dxf" % ts
-        outpath = os.path.join(OUTDIR, fn)
-        with open(outpath, "w", encoding="latin-1", newline="") as f:
-            f.write(content)
-        if raw and frame_path and content:
-            try:
-                s2, _o = wr.parse_sections_text(wr.read_dxf_text(outpath))
-                g2 = wr.group_entities(s2.get("ENTITIES", []))
-                svg = wr.entities_to_svg(g2, wr._blocks_map(s2))
-            except Exception:
-                pass
-        resp = {"svg": svg, "dxf_url": "/out/" + fn, "log": log,
-                "dxf_file": outpath}
-        self._send(200, json.dumps(resp).encode("utf-8"), "application/json")
+        self._send(404, b"not found")
+
 
     def _generate_array(self):
         """阵列 + 线束（手册第 13 章）：界面上的线束链复用“块库 + 链”两块。"""
@@ -1119,7 +1195,9 @@ class Handler(BaseHTTPRequestHandler):
                                        only_blocks=set(
                                            [x for x in (spec["module"], spec["module_first"],
                                                        spec["module_mid"], spec["module_last"])
-                                            if x] + list(spec["harness"])),
+                                            if x] + list(spec["harness"])
+                                           + wr.bha_block_names(spec.get("bha"),
+                                                                int(spec.get("n_strings") or 0))),
                                        progress=pg)
             except Exception as ex:
                 import traceback
@@ -1143,108 +1221,111 @@ class Handler(BaseHTTPRequestHandler):
         self._send(200, json.dumps(resp).encode("utf-8"), "application/json")
 
     def _generate_batch(self):
-        """批量（一框一张）：一行 = 一张图。
+        """批量：一行 = 一张图，全部拼进**同一张图纸**（每张各自调一份外框模板）。
 
-        每张都**重新调一次外框模板**、参数各自独立（第 1 张 3 串、第 2 张 4 串都行），
-        每张单独落一个 DXF（+ 线长 CSV），最后打包一个 zip。
+        每张各自调一份新的外框模板独立生成（参数互不影响），然后整张打包成一个
+        块（块名 = 图号）并进底图，按“从左到右、从上到下”排格子，
+        输出一个 DXF（+ 一张带图号的线长清单 CSV）。
         """
         PROGRESS["running"] = True
         set_progress(1, "准备")
+        box = {"log": []}
         ln = int(self.headers.get("Content-Length", 0))
         req = json.loads(self.rfile.read(ln).decode("utf-8"))
         rows = [r for r in (req.get("rows") or []) if isinstance(r, dict)]
         log = []
+        frame0 = (req.get("frame") or "").strip()
         if not rows:
             PROGRESS["running"] = False
             self._send(200, json.dumps(
-                {"files": [], "zip_url": "", "total": 0,
-                 "log": ["批量模式还没有要画的图：先填份数、点“铺出 N 行”"]}
+                {"svg": "", "log": ["批量还没有要画的图：先填份数、点“铺出 N 行”"]}
             ).encode("utf-8"), "application/json")
             return
-        total = len(rows)
-        frame0 = req.get("frame", "") or ""
-        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        os.makedirs(OUTDIR, exist_ok=True)
-        files = []
+
+        items = []
         for n, row in enumerate(rows, 1):
             frame_name = (row.get("frame") or frame0 or "").strip()
             no = safe_name(row.get("no"), "SLD-%03d" % n)
-            try:                       # 每行可以单独给串数/每串板数，空着就用界面上那套
+            if not frame_name:
+                log.append("—— 第 %d/%d 张 %s：没选外框图，跳过 ——" % (n, len(rows), no))
+                continue
+            try:                       # 每行单独的串数/板数/线号；空着沿用界面上那套
                 over = {"n_strings": int(row.get("n_strings") or 0) or None,
-                        "n_per": int(row.get("n_per") or 0) or None}
+                        "n_per": int(row.get("n_per") or 0) or None,
+                        "awg_main": str(row.get("awg_main") or "").strip() or None,
+                        "awg_branch": str(row.get("awg_branch") or "").strip() or None,
+                        # 这一行自己的 BHA 桩/电机位置；空 = 沿用界面上那张表
+                        "bha": str(row.get("bha") or "").strip() or None}
             except (TypeError, ValueError):
                 over = {}
-            if not frame_name:
-                log.append("—— 第 %d/%d 张 %s：没选外框图，跳过 ——" % (n, total, no))
-                continue
-            frame_path = os.path.join(FRAMES_DIR, os.path.basename(frame_name))
-            spec = array_spec(req, over)
-            log = log + ["—— 第 %d/%d 张 %s（%s，%d 串 × %d 块）——"
-                         % (n, total, no, os.path.basename(frame_name),
-                            spec.get("n_strings", 0), spec.get("n_per", 0))]
+            items.append({"name": no,
+                          "frame": os.path.join(FRAMES_DIR, os.path.basename(frame_name)),
+                          "spec": array_spec(req, over)})
+        if not items:
+            PROGRESS["running"] = False
+            self._send(200, json.dumps(
+                {"svg": "", "log": log + ["批量：没有一张选了外框图"]}
+            ).encode("utf-8"), "application/json")
+            return
 
-            def pg(pct, stage, _n=n, _log=log):
-                set_progress(int(((_n - 1) + max(0.0, min(100.0, float(pct))) / 100.0)
-                                 * 100.0 / total),
-                             "第 %d/%d 张 · %s" % (_n, total, stage), _log[-8:])
+        box["log"] = log
 
-            pg(1, "开始")
-            text, rlog, wires = wr.build_array_frame(frame_path, spec, log=log, progress=pg)
-            log = rlog or log
-            if not text:
-                log.append("⚠ %s 没画出来，跳过这张" % no)
-                continue
-            fn = "%s_%s.dxf" % (no, stamp)
-            outpath = os.path.join(OUTDIR, fn)
-            with open(outpath, "w", encoding="latin-1", newline="") as f:
-                f.write(text)
-            csv_fn = ""
+        def pg(pct, stage):
+            set_progress(pct, stage, box["log"][-8:])
+
+        text, log, wires, names = wr.build_multi_frame(
+            items, cols=req.get("cols", 2),
+            gap_x=req.get("gap_sheet_x", 300), gap_y=req.get("gap_sheet_y", 300),
+            order=req.get("order", "row"), log=box["log"], progress=pg)
+        box["log"] = log
+        if not text:
+            PROGRESS["running"] = False
+            self._send(200, json.dumps({"svg": "", "log": log}).encode("utf-8"),
+                       "application/json")
+            return
+
+        set_progress(90, "写 DXF 文件")
+        os.makedirs(OUTDIR, exist_ok=True)
+        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        fn = "拼图_%s.dxf" % stamp
+        outpath = os.path.join(OUTDIR, fn)
+        with open(outpath, "w", encoding="latin-1", newline="") as f:
+            f.write(text)
+        csv_fn = ""
+        try:
+            ag.write_csv_multi(os.path.splitext(outpath)[0] + ".csv", wires)
+            csv_fn = os.path.splitext(fn)[0] + ".csv"
+        except Exception as ex:
+            log.append("⚠ 线长清单没写成: %s" % ex)
+        if req.get("to_cad"):
+            log.append("—— 画到 CAD（%d 张一起画进当前图）——" % len(names))
+            dwg = os.path.join(FRAMES_DIR,
+                               os.path.splitext(os.path.basename(items[0]["frame"]))[0] + ".dwg")
             try:
-                ag.write_csv(os.path.splitext(outpath)[0] + ".csv", wires)
-                csv_fn = os.path.splitext(fn)[0] + ".csv"
+                cd.draw_dxf_into_cad(outpath, dwg, log,
+                                     use_original=False,      # 一律画副本，不动外框原文件
+                                     copy_dir=OUTDIR, only_blocks=set(names),
+                                     progress=pg, sheet_names=names)
             except Exception as ex:
-                log.append("⚠ 线长清单没写成: %s" % ex)
-            if req.get("to_cad"):
-                log.append("—— 第 %d/%d 张画到 CAD ——" % (n, total))
-                dwg = os.path.join(FRAMES_DIR, os.path.splitext(frame_name)[0] + ".dwg")
-                try:
-                    cd.draw_dxf_into_cad(
-                        outpath, dwg, log,
-                        use_original=bool(req.get("cad_original")), copy_dir=OUTDIR,
-                        only_blocks=set(
-                            [x for x in (spec.get("module", ""), spec.get("module_first", ""),
-                                         spec.get("module_mid", ""), spec.get("module_last", ""))
-                             if x] + list(spec.get("harness") or [])),
-                        progress=pg)
-                except Exception as ex:
-                    import traceback
-                    log.append("⚠ 画到 CAD 失败: %s: %s" % (type(ex).__name__, ex))
-                    log.extend(traceback.format_exc().strip().splitlines()[-4:])
-            files.append({"no": no, "name": fn, "url": "/out/" + fn,
-                          "csv": csv_fn, "csv_url": ("/out/" + csv_fn) if csv_fn else ""})
-        zip_name = ""
-        if files:
-            zip_name = "批量_%s.zip" % stamp
-            try:
-                with zipfile.ZipFile(os.path.join(OUTDIR, zip_name), "w",
-                                     zipfile.ZIP_DEFLATED) as z:
-                    for f in files:
-                        z.write(os.path.join(OUTDIR, f["name"]), f["name"])
-                        if f["csv"]:
-                            z.write(os.path.join(OUTDIR, f["csv"]), f["csv"])
-            except Exception as ex:
-                log.append("⚠ 打包 zip 失败: %s" % ex)
-                zip_name = ""
-        log.append("批量完成：共 %d 张，成功 %d 张" % (total, len(files)))
+                import traceback
+                log.append("⚠ 画到 CAD 失败: %s: %s" % (type(ex).__name__, ex))
+                log.extend(traceback.format_exc().strip().splitlines()[-4:])
+        svg = ""
+        try:
+            s2, _o = wr.parse_sections_text(wr.read_dxf_text(outpath))
+            svg = wr.entities_to_svg(wr.group_entities(s2.get("ENTITIES", [])),
+                                     wr._blocks_map(s2))
+        except Exception:
+            pass
+        resp = {"svg": svg, "dxf_url": "/out/" + fn, "dxf_file": outpath, "dxf_name": fn,
+                "csv_url": ("/out/" + csv_fn) if csv_fn else "", "csv_name": csv_fn,
+                "sheets": names, "log": log}
         set_progress(100, "批量完成", log[-8:])
         PROGRESS["running"] = False
         sw = stale_warning()
         if sw:
             log = [sw] + list(log)
-        self._send(200, json.dumps({"files": files, "total": total,
-                                    "zip_url": ("/out/" + zip_name) if zip_name else "",
-                                    "zip_file": zip_name,
-                                    "log": log}).encode("utf-8"), "application/json")
+        self._send(200, json.dumps(resp).encode("utf-8"), "application/json")
 
 
 def main():

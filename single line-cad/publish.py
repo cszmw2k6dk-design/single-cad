@@ -46,36 +46,26 @@ def read_version():
         return {}
 
 
-VER_PREFIX = "v"          # 版本号统一 v 开头：v20260916.1506
+VER_PREFIX = "v"          # 版本号统一 v 开头，从 v1.0 起算：v1.0 → v1.1 → v1.2 …
 
 
 def bump_version(old):
-    """给出一个**严格大于**旧版本号的新版本号：vYYYYMMDD.HHMM。
+    """给出下一个版本号：**最后一段数字 +1**（v1.0 → v1.1 → v1.2 …）。
 
-    用当前时间；如果算出来不比旧的大（同一分钟内连着发两次），就把最后两位 +1。
-    旧版本号带不带 v 都能解析（历史数据是 20260916.1506 这种不带前缀的）。
+    想发补丁号就自己手写 v1.0.1，下次自动变 v1.0.2。
+    老式日期号（v20260916.1506，第一段是 8 位日期）一律归到新号起点 v1.0 ——
+    已经装了老版本的客户端也能收到这次更新（app_update._is_newer 有同一条过渡规则）。
     """
-    now = datetime.datetime.now()
-    cand = now.strftime("%Y%m%d.%H%M")
-
-    def segs(v):
-        try:
-            d, hm = str(v).strip().lstrip("vV").split(".")
-            return (int(d), int(hm[:2]), int(hm[2:4]))
-        except Exception:
-            return (0, 0, 0)
-
-    if not segs(old) or segs(cand) > segs(old):     # 旧号解析不出来就直接用当前时间
-        return VER_PREFIX + cand
-    d, h, m = segs(old)
-    m += 1
-    if m >= 60:
-        m = 0
-        h += 1
-    if h >= 24:
-        h = 0
-        d += 1
-    return VER_PREFIX + "%08d.%02d%02d" % (d, h, m)
+    nums = []
+    for part in re.split(r"[._\-+]+", str(old or "").strip().lstrip("vV")):
+        if part.isdigit():
+            nums.append(int(part))
+        elif part:
+            break                       # 遇到 beta 之类的后缀就停，只认前面的数字段
+    if not nums or nums[0] >= 1000:     # 日期式老号 / 没号 -> 新号起点
+        return VER_PREFIX + "1.0"
+    nums[-1] += 1
+    return VER_PREFIX + ".".join(str(n) for n in nums)
 
 
 def recent_summary():

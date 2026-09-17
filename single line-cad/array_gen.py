@@ -45,10 +45,30 @@ def write_retry(path, text):
 
 
 def write_csv(path, wires):
-    lines = ["#阵列+线束 线长清单（线上不写长度，写的是线号）",
-             "序号,范围,线号AWG,长度"]
+    # 表头中英对照：中英文用户拿到的都是同一份文件，列数不变
+    lines = ["#阵列+线束 线长清单 / Array+harness wire list（线上不写长度，写的是线号 / lengths are on the wire labels）",
+             "序号 No.,范围 Range,线号AWG AWG,长度 Length"]
     for i, (what, awg, L) in enumerate(wires, 1):
         lines.append("%d,%s,%s,%.3f" % (i, what, awg, L))
+    with open(path, "w", encoding="utf-8-sig", newline="") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def write_csv_multi(path, wires):
+    """拼图的线长清单：多一列“图号 / Sheet”，一张一张分开编序号。
+
+    wires 每项 (图号, 范围, 线号, 长度)；没有图号的老三列写法也认。
+    """
+    lines = ["#拼图 线长清单 / Multi-sheet wire list（线上不写长度，写的是线号 / lengths are on the wire labels）",
+             "图号 Sheet,序号 No.,范围 Range,线号AWG AWG,长度 Length"]
+    seq = 0
+    for row in wires:
+        if len(row) >= 4:
+            no, what, awg, L = row[0], row[1], row[2], row[3]
+        else:
+            no, what, awg, L = "", row[0], row[1], row[2]
+        seq += 1
+        lines.append("%s,%d,%s,%s,%.3f" % (no, seq, what, awg, L))
     with open(path, "w", encoding="utf-8-sig", newline="") as f:
         f.write("\n".join(lines) + "\n")
 
@@ -138,6 +158,12 @@ def main(argv=None):
     ap.add_argument("--gap-x", type=float, default=2.0, help="板与板之间的净空（贴板就小）")
     ap.add_argument("--gap-y", type=float, default=2.0,
                     help="串与串之间的净空（中间可能要放电机，放就调大）")
+    ap.add_argument("--bha", default="",
+                    help="电机 / BHA 桩插在板与板之间（可多处，用 ; 隔开）。"
+                         "一处写法：串号:第几块之后:桩块:电机块:电机旋转:左净空:右净空。"
+                         "例：--bha \"全部:10:BHA:MOTOR:0\"  或  --bha \"2:5:BHA:MOTOR:90;4:12:BHA\"；"
+                         "串号可以留空/写 全部，也可以写 1,3 或 2-4；"
+                         "桩右边的板整体右移（位移 = 桩宽 + 左右净空 - 板间净空），阵列自动变长")
     ap.add_argument("--dir", default="right", choices=["right", "down"],
                     help="串的排法：right=从左往右接（默认），down=从上往下叠")
     ap.add_argument("--link-array", action="store_true",
@@ -148,8 +174,12 @@ def main(argv=None):
     ap.add_argument("--gap", type=float, default=40.0, help="线束内块间隔")
     ap.add_argument("--pos-feeder", default="POS", help="线束里哪一块是正极支线（一根对一串）")
     ap.add_argument("--neg-feeder", default="NEG", help="线束里哪一块是负极支线（自动补齐负极行时用）")
-    ap.add_argument("--awg-main", default="", help="主线线号（标在块与块之间的连线上），如 2/0 AWG")
-    ap.add_argument("--awg-branch", default="", help="支线线号（只进 CSV/日志，板与板之间不标字），如 6 AWG")
+    ap.add_argument("--awg-main", default="",
+                    help="主线线号（标在块与块之间的连线上），如 2/0 AWG；"
+                         "界面上是从 750 MCM / 500 MCM / 2/0 AWG / 4 AWG / 6 AWG / 8 AWG / 10 AWG 里选")
+    ap.add_argument("--awg-branch", default="",
+                    help="支线线号（只进 CSV/日志，板与板之间不标字），如 10 AWG；"
+                         "界面上是从 10 AWG / 12 AWG 里选")
     ap.add_argument("--allow-enlarge", action="store_true", help="允许放大到占满（默认只缩不放）")
     ap.add_argument("--keep-from", default="",
                     help="保留这个旧输出里手工画的实体（图层名以 HAND 开头）")
@@ -181,6 +211,7 @@ def main(argv=None):
                 n_per=a.n_per, n_strings=a.n_strings,
                 gap_x=a.gap_x, gap_y=a.gap_y, dir=a.dir, link_array=a.link_array,
                 harness_scale=a.harness_scale,
+                bha=a.bha,
                 harness=harness, gap=a.gap, pos_feeder=a.pos_feeder,
                 neg_feeder=a.neg_feeder, awg_main=a.awg_main,
                 awg_branch=a.awg_branch, allow_enlarge=a.allow_enlarge,
@@ -223,7 +254,9 @@ def main(argv=None):
         if a.preview_content:
             try:
                 sec, _o = wr.parse_sections(outpath, "utf-8")
-                keep_names = set([a.module, a.module_first, a.module_mid, a.module_last] + harness)
+                keep_names = set([a.module, a.module_first, a.module_mid, a.module_last]
+                                 + harness
+                                 + wr.bha_block_names(a.bha, a.n_strings))   # BHA 桩/电机
                 keep = [e for e in wr.group_entities(sec.get("ENTITIES", []))
                         if wr._g1(e, "2") in keep_names
                         or (wr._g1(e, "8") or "").upper() in ("WIRE", "WIRE_LABEL")]

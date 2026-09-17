@@ -210,19 +210,28 @@ def check():
 
 
 def _is_newer(remote, local):
-    """版本号比较：优先按 (年,月,日,时,分) 这种数字段比，比不出就按字符串。
+    """版本号比较：先分“代”，再逐段比数字，最后按字符串。
 
-    版本号统一 v 开头（v20260916.1506），但老客户端里存的是不带 v 的号，
-    所以比较前先把前缀剥掉 —— 否则 "v2026…" 会被当成非数字，直接被判成"没有新版本"。
+    两代版本号：
+      · 老号 = 日期式（v20260916.1506，第一段是 8 位日期，≥1000）
+      · 新号 = 语义式（v1.0 起，第一段 < 1000）：v1.0 < v1.1 < v1.2 …
+
+    **新号永远比老号新** —— 这样已经装了 v2026… 的客户端也能收到 v1.0 这次更新。
+    老客户端里存的号可能不带 v（20260916.1506），比较前统一把前缀剥掉。
     """
     def segs(v):
         out = []
         for part in str(v).strip().lstrip("vV").replace("-", ".").replace("_", ".").split("."):
             out.append(int(part) if part.isdigit() else -1)
         return out
+
+    def gen(s):
+        """0 = 老式日期号（或认不出来），1 = v1.0 起的语义号。"""
+        return 1 if (s and 0 <= s[0] < 1000) else 0
+
     a, b = segs(remote), segs(local)
     if a != b:
-        return a > b
+        return (gen(a), a) > (gen(b), b)
     return str(remote) != str(local)
 
 

@@ -15,6 +15,7 @@ cad_draw.py -- 把生成好的 DXF 内容“回放”进 CAD（ZWCAD COM 直画�
 
 import math
 import os
+import time
 
 import wiring_raw as wr
 
@@ -189,6 +190,7 @@ def ensure_block(doc, name, bmap, log):
                 for lay in sorted({prim_style(p)[0] for p in prims if prim_style(p)[0]}):
                     ensure_layer(doc, lay)
                 n = draw_prims(blk, prims)
+                n += add_dims(blk, doc, dims_in_records(recs), log)
                 log.append("块 %s 已存在但是空的，补画了 %d 个图元" % (name, n))
                 return True, n
         except Exception as ex:
@@ -203,11 +205,87 @@ def ensure_block(doc, name, bmap, log):
     for lay in sorted({prim_style(p)[0] for p in prims if prim_style(p)[0]}):
         ensure_layer(doc, lay)
     n = draw_prims(blk, prims)
+    n += add_dims(blk, doc, dims_in_records(recs), log)   # 块里的线号标注
     log.append("现造块定义 %s（展平后 %d 个图元；原来是嵌套块/样条线的话会变成折线）" % (name, n))
     return True, n
 
 
-def replay(doc, dxf_path, log, only_blocks=None, only_layers=OUR_LAYERS, progress=None):
+def dims_in_records(recs):
+    """从一组记录里挑出我们的线号标注（DIMENSION 实体），返回
+    [(界线点1, 界线点2, 尺寸线位置, 文字位置, 文字), ...]。
+
+    模型空间（replay）和块定义里（合图时每张图是一个块）都用这一套，
+    保证 CAD 里建的标注和 DXF 里写的是同一批点。
+    """
+    out = []
+    for e in recs:
+        if not e or e[0] != ("0", "DIMENSION"):
+            continue
+        if (wr._g1(e, "8") or "").upper() != "WIRE_LABEL":
+            continue
+        out.append(((wr._gf(e, "13"), wr._gf(e, "23")),
+                    (wr._gf(e, "14"), wr._gf(e, "24")),
+                    (wr._gf(e, "10"), wr._gf(e, "20")),
+                    (wr._gf(e, "11"), wr._gf(e, "21")),
+                    (wr._g1(e, "1") or "").strip()))
+    return out
+
+
+def add_dims(space, doc, dims, log):
+    """按 (界线点1, 界线点2, 尺寸线位置, 文字位置, 文字) 建 CAD 原生对齐标注。
+
+    space 可以是模型空间，也可以是块定义（合图时每张图是一个块，标注在块里）。
+    返回建了几个。文字用的是**线号**（和 DXF 里一致），不是量出来的长度。
+    """
+    n = 0
+    for (o1, o2, dpos, tpos, txt) in dims:
+        try:
+            d = space.AddDimAligned(pt(o1[0], o1[1]), pt(o2[0], o2[1]),
+                                    pt(dpos[0], dpos[1]))
+            # 样式：按用户图纸的格式用 Voltage（注释性 1:1、文字样式 Voltage）
+            for _st in ("Voltage", "ISO-25", "Standard"):
+                try:
+                    d.StyleName = _st
+                    break
+                except Exception:
+                    pass
+            for _attr, _val in (("TextHeight", 8.0), ("TextGap", 0.1),
+                                ("TextStyle", "Voltage"), ("TextColor", 5)):
+                try:
+                    setattr(d, _attr, _val)
+                except Exception:
+                    pass
+            _ok = False
+            if txt:
+                try:
+                    d.TextOverride = txt      # 尺寸线上写线号
+                    _ok = True
+                except Exception:
+                    _ok = False
+            if txt and not _ok:               # 改不了文字就单独补一个文字，别丢线号
+                try:
+                    o = space.AddText(txt, pt(tpos[0], tpos[1]), 8.0)
+                    o.Layer = "WIRE_LABEL"
+                except Exception:
+                    pass
+            try:
+                if float(d.ArrowheadSize) < 3.0:
+                    d.ArrowheadSize = 6.6
+            except Exception:
+                pass
+            ensure_layer(doc, "DIM")
+            try:
+                d.Layer = "DIM"
+            except Exception:
+                pass
+            n += 1
+        except Exception as ex:
+            log.append("⚠ 加线号标注失败: %s" % ex)
+    return n
+
+
+def replay(doc, dxf_path, log, only_blocks=None, only_layers=OUR_LAYERS,
+           progress=None, sheet_names=None):
     """把 dxf_path 里“我们生成的那部分”画进 doc。返回统计。
 
     only_blocks：只回放块名在这里面的 INSERT（外框图自己的块不重画）。
@@ -228,21 +306,15 @@ def replay(doc, dxf_path, log, only_blocks=None, only_layers=OUR_LAYERS, progres
     stat = {"INSERT": 0, "LINE": 0, "LWPOLYLINE": 0, "TEXT": 0, "POINT": 0,
             "ARC": 0, "CIRCLE": 0, "skip": 0, "blk_prim": 0,
             "DIM": 0, "LEADER": 0}
-    # 我们画的连线 / 线号标注，先收集起来，最后用 CAD 原生标注去标
-    our_wires, our_labels = [], []
-    for e in recs:
-        if not e:
-            continue
-        lay = (wr._g1(e, "8") or "").upper()
-        if lay == "WIRE" and e[0][1] == "LINE":
-            our_wires.append(((wr._gf(e, "10"), wr._gf(e, "20")),
-                              (wr._gf(e, "11"), wr._gf(e, "21"))))
-        elif lay == "WIRE_LABEL" and e[0][1] == "TEXT":
-            our_labels.append(((wr._gf(e, "10"), wr._gf(e, "20")),
-                               (wr._g1(e, "1") or "").strip(),
-                               wr._gf(e, "40", 2.5)))
-    _skip_lab = bool(our_wires and our_labels)
+    # 线号标注：**DXF 里是什么点就用什么点**。
+    # 以前这里按“离标注最近的那根线 / 离端点最近的 CONN-Label 点”重新算一遍，
+    # 于是同一根线跑两次可能挑到不同块的点、甚至挑到隔壁行/隔壁张的线 —— CAD 里
+    # 看着就是标注点乱跳。现在只读 DXF（wiring_raw 已经算好：落点=连线中点+
+    # 统一偏移，界线两端=这根线自己的接点），画到 CAD 和 DXF 一字不差。
+    our_dims = dims_in_records(recs)
     made = set()
+    _sheets = set(sheet_names or [])
+    _n_sheet, _t_sheet, _t_all = 0, 0.0, time.time()
     pg(94, "正在画 %d 个实体（块定义/连线/文字）…" % len(recs))
     _n_done = 0
     for e in recs:
@@ -253,11 +325,14 @@ def replay(doc, dxf_path, log, only_blocks=None, only_layers=OUR_LAYERS, progres
         if t == "INSERT":
             if only_blocks is not None and (wr._g1(e, "2") or "") not in only_blocks:
                 continue
+        elif t == "DIMENSION":
+            continue                  # 我们自己的标注到最后统一用 CAD 原生标注建
         elif LAY is not None and lay.upper() not in LAY:
             continue
         try:
             if t == "INSERT":
                 nm = wr._g1(e, "2") or ""
+                _t0 = time.time() if nm in _sheets else 0.0
                 if nm not in made:
                     ok, np = ensure_block(doc, nm, bmap, log)
                     stat["blk_prim"] += np
@@ -271,6 +346,14 @@ def replay(doc, dxf_path, log, only_blocks=None, only_layers=OUR_LAYERS, progres
                                  wr._gf(e, "50", 0.0))
                 o.Layer = lay
                 stat["INSERT"] += 1
+                if _t0:                       # 这一张画完了：报一下用时
+                    _n_sheet += 1
+                    _el = time.time() - _t0
+                    _t_sheet += _el
+                    log.append("画到 CAD：第 %d/%d 张 %s 画完，用时 %.1f 秒"
+                               % (_n_sheet, len(_sheets), nm, _el))
+                    pg(94 + min(3, _n_sheet), "第 %d/%d 张 %s 画完（%.1f 秒）"
+                       % (_n_sheet, len(_sheets), nm, _el))
             elif t == "LINE":
                 o = ms.AddLine(pt(wr._gf(e, "10"), wr._gf(e, "20")),
                                pt(wr._gf(e, "11"), wr._gf(e, "21")))
@@ -305,8 +388,6 @@ def replay(doc, dxf_path, log, only_blocks=None, only_layers=OUR_LAYERS, progres
                 txt = (wr._g1(e, "1") or "").strip()
                 if not txt:
                     continue
-                if _skip_lab and lay == "WIRE_LABEL":
-                    continue              # 线号改用原生引线标注画（后面统一处理）
                 o = ms.AddText(txt, pt(wr._gf(e, "10"), wr._gf(e, "20")),
                                max(wr._gf(e, "40", 2.5), 0.1))
                 o.Layer = lay
@@ -330,91 +411,13 @@ def replay(doc, dxf_path, log, only_blocks=None, only_layers=OUR_LAYERS, progres
             pg(94 + min(3, _n_done * 3 // max(1, len(recs))),
                "正在画实体 %d/%d…" % (_n_done, len(recs)))
 
-    # ---- 用 CAD 原生标注：尺寸标注(长度) + 引线标注(线号) ----
-    if _skip_lab:
-        pg(97, "正在加标注（长度 %d 个 + 线号）…" % len(our_labels))
-        _lab_pts = [L[0] for L in our_labels]
-
-        def _nearest_pt(pts, p):
-            """离 p 最近的 CONN-Label 点（左右界限都用它，不用导线自己的接点）。"""
-            best, bd = None, None
-            for q in pts:
-                d2 = (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2
-                if bd is None or d2 < bd:
-                    best, bd = q, d2
-            return best
-
-        def _nearest_seg(p):
-            best, bd = None, None
-            for a, b in our_wires:
-                ax, ay = a; bx, by = b
-                dx, dy = bx - ax, by - ay
-                L2 = dx * dx + dy * dy
-                t0 = 0.0 if L2 <= 1e-12 else max(0.0, min(1.0, ((p[0]-ax)*dx + (p[1]-ay)*dy) / L2))
-                qx, qy = ax + dx * t0, ay + dy * t0
-                d = math.hypot(p[0]-qx, p[1]-qy)
-                if bd is None or d < bd:
-                    best, bd = (a, b), d
-            return best
-
-        for pos, txt, h in our_labels:
-            seg = _nearest_seg(pos)
-            if not seg:
-                continue
-            a, b = seg
-            mid = ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
-            dx, dy = b[0] - a[0], b[1] - a[1]
-            L = math.hypot(dx, dy) or 1.0
-            nx, ny = -dy / L, dx / L
-            off = max(h * 2.0, L * 0.06)         # 尺寸线离线多远
-            try:
-                # 尺寸界线的左右界限 = 两端块里 CONN-Label 层的点（用户确认的取点方式）
-                o1 = _nearest_pt(_lab_pts, a) or a
-                o2 = _nearest_pt(_lab_pts, b) or b
-                d = ms.AddDimAligned(pt(o1[0], o1[1]), pt(o2[0], o2[1]),
-                                     pt(mid[0] + nx * off, mid[1] + ny * off))
-                # 标注样式：按用户图纸的格式用 Voltage（注释性 1:1、文字样式 Voltage）
-                for _st in ("Voltage", "ISO-25", "Standard"):
-                    try:
-                        d.StyleName = _st
-                        break
-                    except Exception:
-                        pass
-                # 用户面板上的格式：文字高度 8、文字偏移 0.1、文字颜色 蓝(5)、文字样式 Voltage
-                for _attr, _val in (("TextHeight", 8.0), ("TextGap", 0.1),
-                                    ("TextStyle", "Voltage"), ("TextColor", 5)):
-                    try:
-                        setattr(d, _attr, _val)
-                    except Exception:
-                        pass
-                # 箭头：样式里给的太小（外框图自带的样式常常是 0.08）才兜底改成可见的
-                try:
-                    if float(d.ArrowheadSize) < 3.0:
-                        d.ArrowheadSize = 6.6
-                except Exception:
-                    pass
-                ensure_layer(doc, "DIM")
-                d.Layer = "DIM"
-                stat["DIM"] += 1
-            except Exception as ex:
-                stat["skip"] += 1
-                log.append("⚠ 加尺寸标注失败: %s" % ex)
-            try:
-                mt = ms.AddMText(pt(pos[0], pos[1]), 0.0, txt)
-                mt.Height = max(h, 0.1)
-                mt.Layer = "WIRE_LABEL"
-                ms.AddLeader(flat2([mid, (pos[0], pos[1])]), mt, 0)
-                stat["LEADER"] += 1
-            except Exception as ex:
-                stat["skip"] += 1
-                # 原生引线建不出来就退回画文字，别让线号彻底消失
-                log.append("⚠ 加引线标注失败(%s)，改画普通文字: %s" % (type(ex).__name__, ex))
-                try:
-                    o = ms.AddText(txt, pt(pos[0], pos[1]), max(h, 0.1))
-                    o.Layer = "WIRE_LABEL"
-                    stat["TEXT"] += 1
-                except Exception:
-                    pass
+    # ---- 线号标注：按 DXF 里的点建 CAD 原生标注（坐标一模一样，不再重算）----
+    if our_dims:
+        pg(97, "正在加线号标注（%d 个）…" % len(our_dims))
+        stat["DIM"] += add_dims(ms, doc, our_dims, log)
+    if _n_sheet:                      # 合图：把每张的用时汇总一下
+        log.append("画到 CAD：%d 张图纸，纯画图用时 %.1f 秒（含标注共 %.1f 秒）"
+                   % (_n_sheet, _t_sheet, time.time() - _t_all))
     return stat
 
 
@@ -451,9 +454,10 @@ def clear_ours(doc, blocks, layers, log=None):
 
 def draw_dxf_into_cad(dxf_path, dwg_path, log=None, use_original=False,
                       copy_dir=None, visible=True, only_blocks=None,
-                      clear_first=True, progress=None):
+                      clear_first=True, progress=None, sheet_names=None):
     """把 dxf_path 的内容画进 dwg_path（默认画在副本上，不动原文件）。"""
     log = log if log is not None else []
+    _t_start = time.time()
 
     def pg(pct, stage):
         if progress:
@@ -508,7 +512,8 @@ def draw_dxf_into_cad(dxf_path, dwg_path, log=None, use_original=False,
         if n:
             log.append("先清掉上一次程序画的内容 %d 个（只删 %s 层和这几个块的插入）"
                        % (n, "/".join(OUR_LAYERS)))
-    stat = replay(doc, dxf_path, log, only_blocks=only_blocks, progress=pg)
+    stat = replay(doc, dxf_path, log, only_blocks=only_blocks, progress=pg,
+                  sheet_names=sheet_names)
     pg(98, "实体画完，正在加长度标注/线号，并缩放到范围")
     try:
         app.ZoomExtents()
@@ -518,6 +523,7 @@ def draw_dxf_into_cad(dxf_path, dwg_path, log=None, use_original=False,
                "（跳过的 %d），另外现造块定义用了 %d 个图元"
                % (stat["INSERT"], stat["LINE"], stat["LWPOLYLINE"], stat["TEXT"],
                   stat["POINT"], stat["skip"], stat["blk_prim"]))
+    log.append("画到 CAD 总共用时 %.1f 秒" % (time.time() - _t_start))
     log.append("没有自动保存，你在 CAD 里看过再决定存不存。")
     pg(100, "画到 CAD 完成（还没保存，你在 CAD 里确认后自己存）")
     return True

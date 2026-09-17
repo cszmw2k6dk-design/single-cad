@@ -13,6 +13,9 @@ single line-cad/dist/
 single line-cad/build/
 single line-cad/*.spec.bak
 Barnett单线图生成器/
+# 发布文件夹 / 版本 zip（assemble_app.py 的默认目标是仓库外，但万一跑到仓库里也别提交）
+Single-CAD/
+Single-CAD_v*.zip
 
 # 手工/自动备份
 *_备份/
