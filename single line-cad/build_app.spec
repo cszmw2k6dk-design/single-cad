@@ -1,11 +1,11 @@
 # -*- mode: python ; coding: utf-8 -*-
 """
-build_app.spec -- 把「Single-CAD」打包成 Windows exe（PyInstaller）。
+build_app.spec -- 把「Single line-CAD」打包成 Windows exe（PyInstaller）。
 
 用法（在项目根目录）：
     python -m PyInstaller build_app.spec --noconfirm
 
-产物：dist/Single-CAD/Single-CAD.exe
+产物：dist/Single line-CAD/Single line-CAD.exe
 之后再跑 assemble_app.py 把 blocklib / templates / out / 使用说明 摆到 exe 旁边。
 
 设计要点：
@@ -81,7 +81,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="Single-CAD",
+    name="Single line-CAD",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

@@ -10,10 +10,10 @@
      统统写进 exe 旁边的「启动日志.txt」，出问题能查。
 
 用法：
-    Single-CAD.exe                 正常用（桌面窗口）
-    Single-CAD.exe --browser       用浏览器打开
-    Single-CAD.exe --port 8790     指定端口
-    Single-CAD.exe --selftest      自检：起服务、跑一次生成、打印结果并退出
+    Single line-CAD.exe                 正常用（桌面窗口）
+    Single line-CAD.exe --browser       用浏览器打开
+    Single line-CAD.exe --port 8790     指定端口
+    Single line-CAD.exe --selftest      自检：起服务、跑一次生成、打印结果并退出
 """
 
 import io
@@ -96,7 +96,7 @@ def _setup_logging():
     """无控制台运行时，日志文件是唯一的排错入口。"""
     try:
         with open(LOG_PATH, "w", encoding="utf-8") as f:
-            f.write("Single-CAD 启动日志\n")
+            f.write("Single line-CAD 启动日志\n")
             f.write("exe: %s\n" % (sys.executable if _FROZEN else __file__))
             f.write("frozen(打包运行): %s\n\n" % _FROZEN)
     except Exception:
@@ -142,7 +142,7 @@ def _selftest():
     print("输出目录  :", m.OUTDIR)
     body = {
         "frame": (d.get("frames") or [""])[0], "n_per": 20, "n_strings": 3,
-        "gap_x": 2, "gap_y": 30, "harness": ["CBX", "FUSE", "POS", "Male", "Male", "Male", "FUSE"],
+        "gap_x": 1, "harness": ["CBX", "FUSE", "POS", "Male", "Male", "Male", "FUSE"],
         "module_first": "PV-POS", "module_mid": "MIDDLE-PV", "module_last": "END-NEG",
         "head_block": "CBX", "pos_feeder": "POS", "neg_feeder": "NEG",
         "pos_plug": "Male", "neg_plug": "Fmale", "awg_main": "2/0 AWG", "neg_head": "Male",
@@ -189,7 +189,7 @@ def _selftest_ui():
     def probe():
         time.sleep(6)                     # 等页面和 API 注入完成
         try:
-            body = json.dumps({"n_per": 4, "n_strings": 2, "gap_x": 2, "gap_y": 30,
+            body = json.dumps({"n_per": 4, "n_strings": 2, "gap_x": 1,
                                "frame": (m.list_frames() or [""])[0],
                                "harness": ["CBX", "FUSE", "POS", "Male", "FUSE"],
                                "pos_feeder": "POS", "neg_feeder": "NEG",

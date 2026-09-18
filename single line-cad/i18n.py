@@ -31,6 +31,28 @@ EN = {
 
     # ================= 界面：两块主面板 =================
     "① 块库（点击加入链）": "① Block library (click to add to the chain)",
+    "① 板子 · 块库 + 阵列": "① Panels · block library + array",
+    "② 线束 · 块库 + 连线（留空也能排：末端母头 + 正极支线×(串数-1) + 末端公头）":
+        "② Harness · block library + wiring (optional: leave empty to auto-arrange "
+        "“tail female + positive feeder × (strings-1) + tail male”)",
+    "点上面的线束块加入…": "Click a harness block above to add it…",
+    "方案": "Scheme",
+    "跨支架距离": "Cross-bracket distance",
+    "① 板子": "① Panels",
+    "② 线束": "② Harness",
+    "先把板子这一页填好，点下面的“下一步：填线束”":
+        "Fill in this panel page first, then click “Next: harness” below",
+    "这一页填线束（线号、支线块、末端接头），填完按“生成”":
+        "Fill in the harness here (wire numbers, feeder blocks, end connectors), then click “Generate”",
+    "下一步：填线束 →": "Next: harness →",
+    "← 上一步": "← Back",
+    "板子：先选“组件 首块”": "Panels: choose the first module block first",
+    "板子：先选“尾块”": "Panels: choose the last module block first",
+    "板子：串数没填": "Panels: the string count is empty",
+    "板子预览（实时）": "Panel preview (live)",
+    "刷新": "Refresh",
+    "（填完组件和串数就会出现预览）": "(the preview appears once the modules and string count are set)",
+    "更新中…": "Updating…",
     "② 链（按顺序摆放并连线）": "② Chain (placed in order and wired up)",
     "② 线束（可以不填：留空自动排“末端母头 + 正极支线×(串数-1) + 末端公头”；想带保险丝等串联块就把块点上来）":
         "② Harness (optional: leave it empty to auto-arrange “tail female plug + positive feeder × (strings-1) "
@@ -52,6 +74,7 @@ EN = {
     "串数": "Strings",
     "板间净空": "Module gap",
     "串间净空": "String gap",
+    "板间/串间净空": "Panel / string gap",
     "串的排法": "String layout",
     "从左往右接": "Left to right",
     "从上往下叠": "Top to bottom",
@@ -75,6 +98,8 @@ EN = {
     "CAD 原生标注(DIMENSION)": "Native CAD dimension (DIMENSION)",
     "线束缩放": "Harness scale",
     "FUSE间距": "FUSE spacing",
+    "块固定间距": "Fixed block spacing",
+    "语言 / Language": "Language",
     "起始块": "Head block",
     "起始块间距": "Head block gap",
     "负极支线旋转": "Negative feeder rotation",
@@ -502,7 +527,7 @@ _cache = {"lang": None}
 def _settings_path():
     """语言选择存在用户目录里（不放程序目录，免得污染 git 仓库）。"""
     root = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-    return os.path.join(root, "Single-CAD", "settings.json")
+    return os.path.join(root, "Single line-CAD", "settings.json")
 
 
 def get_pref():

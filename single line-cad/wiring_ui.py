@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-wiring_ui.py -- Single-CAD UI（本地网站）
+wiring_ui.py -- Single line-CAD UI（本地网站）
 
 界面：左边从块库选块(可重复)，右边组成一条“链”，点“生成连线” ->
       按顺序放块、解插入点、接点对齐、连完线，输出 DXF(保图层) + 预览。
@@ -145,6 +145,20 @@ def list_blocks():
     return names
 
 
+# ------------------------- 块库分两组 -------------------------
+# 界面里“① 板子”一块库、“② 线束”一块库，各管各的填写，逻辑上分开不混。
+# 生成时两块库的块都会并进外框图，所以归到哪一组都不影响能不能画出来 ——
+# 只影响它们在界面上的位置。
+#   板子那一组：阵列/板子自己用的块（含起始块 CBX，CBX 属于板子这页）
+#   线束那一组：组成线束链的块
+BOARD_BLOCKS = ("PV-POS", "MIDDLE-PV", "END-NEG", "CBX", "MOTOR", "BHA", "BHA-PILE")
+
+
+def block_group(name):
+    return ("board" if str(name or "").strip().upper() in
+            {x.upper() for x in BOARD_BLOCKS} else "harness")
+
+
 def app_version():
     """给界面显示的版本号：在线更新过就显示更新后的版本。"""
     if upd is not None:
@@ -230,7 +244,7 @@ def open_with_default(name):
 HTML = r"""<!doctype html>
 <html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Single-CAD</title>
+<title>Single line-CAD</title>
 <style>
  /* 配色/控件风格参照用户另一套 CAD-MAP 编排器的 QSS（深色 + 蓝色主色 + 橙色强调点） */
  :root{--bg:#131415;--card:#17181a;--field:#1f2124;--log:#101113;--line:#2a2c2e;
@@ -238,47 +252,50 @@ HTML = r"""<!doctype html>
        --brand:#0432FA;--brand2:#0a46ff;--accent:#F5A800}
  *{box-sizing:border-box}
  body{margin:0;font-family:"Microsoft YaHei","SimHei","Segoe UI",system-ui,sans-serif;
-      font-size:14px;background:var(--bg);color:var(--ink)}
+      font-size:13px;background:var(--bg);color:var(--ink)}
  ::-webkit-scrollbar{width:10px;height:10px}
  ::-webkit-scrollbar-thumb{background:#2a2c2e;border-radius:8px}
  ::-webkit-scrollbar-track{background:transparent}
- header{background:var(--bg);border-bottom:1px solid var(--line);padding:14px 24px}
- header .logo{color:var(--brand);font-size:30px;font-weight:800;letter-spacing:-1px}
- header h1{margin:0;font-size:17px;font-weight:600}
- header .sub{font-size:12px;color:var(--muted);margin-top:4px}
- #verTxt{color:var(--muted);font-size:12px}
- #updMsg{color:var(--accent);font-size:12px}
- .wrap{display:grid;grid-template-columns:1.05fr 1fr;gap:16px;padding:16px 24px 8px}
- .panel{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
- .panel h2{margin:0 0 12px;font-size:16px;font-weight:600;display:flex;align-items:center;gap:8px}
+ /* 整页按“一屏放下”收紧：目标 1280×800 不用上下滚 */
+ header{background:var(--bg);border-bottom:1px solid var(--line);padding:9px 20px}
+ header .logo{color:var(--brand);font-size:23px;font-weight:800;letter-spacing:-1px}
+ header h1{margin:0;font-size:15px;font-weight:600}
+ header .sub{font-size:11px;color:var(--muted);margin-top:1px}
+ #verTxt{color:var(--muted);font-size:11px}
+ #updMsg{color:var(--accent);font-size:11px}
+ .wrap{display:grid;grid-template-columns:1.05fr 1fr;gap:10px;padding:6px 20px 4px}
+ .panel{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:8px 12px}
+ .panel h2{margin:0 0 6px;font-size:14px;font-weight:600;display:flex;align-items:center;gap:6px}
  .panel h2::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--accent);
                    flex:0 0 auto}
- .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;
-       max-height:330px;overflow:auto}
- .bcard{background:var(--field);border:1px solid var(--line);border-radius:8px;padding:8px;
+ .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;
+       max-height:220px;overflow:auto}
+ .bcard{background:var(--field);border:1px solid var(--line);border-radius:8px;padding:6px;
         text-align:center;cursor:pointer;transition:border-color .15s,background .15s}
  .bcard:hover{border-color:var(--brand);background:rgba(4,50,250,.10)}
- .bcard .nm{font-size:12px;margin-top:4px;color:var(--ink)}
+ .bcard .nm{font-size:11px;margin-top:3px;color:var(--ink)}
  .bcard .badge{display:inline-block;margin-left:5px;padding:0 5px;border-radius:8px;
                font-size:10px;background:rgba(4,50,250,.18);color:#9fc0ff;vertical-align:1px}
- .bcard .thumb{background:#eef1f5;border-radius:6px;padding:4px 2px;display:flex;
-        align-items:center;justify-content:center;height:82px;overflow:hidden}
- .bcard svg{max-width:100%;max-height:74px}
- .chain{display:flex;flex-wrap:wrap;gap:8px;min-height:66px;padding:10px;
+ /* 预览框：给 SVG 一个真正的画布尺寸（以前是 max-height:74px，扁的块按比例
+    缩完只剩几像素高，看着就是一条糊线） */
+ .bcard .thumb{background:#eef1f5;border-radius:6px;padding:4px;display:flex;
+        align-items:center;justify-content:center;height:72px;overflow:hidden}
+ .bcard .thumb svg{width:100%;height:100%;display:block}
+ .chain{display:flex;flex-wrap:wrap;gap:6px;min-height:48px;padding:8px;
         background:var(--log);border:1px dashed var(--line);border-radius:8px}
  .chain>span{color:var(--hint)!important}
  .chip{background:rgba(4,50,250,.15);color:#9fc0ff;border:1px solid rgba(4,50,250,.35);
        border-radius:20px;padding:5px 12px;font-size:13px;display:flex;gap:8px;align-items:center}
  .chip b{cursor:pointer;color:#ff8a80}
- .row{display:flex;gap:12px;align-items:center;margin-top:12px;flex-wrap:wrap}
- .row label{font-size:13px;color:var(--muted)}
+ .row{display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap}
+ .row label{font-size:12px;color:var(--muted)}
  input[type=number],input[type=text],select{background:var(--field);border:1px solid var(--line);
-       border-radius:8px;padding:6px 10px;color:var(--ink);font-size:13px;font-family:inherit}
+       border-radius:8px;padding:4px 8px;color:var(--ink);font-size:12px;font-family:inherit}
  input[type=number]{width:90px}
  input[type=text]:focus,input[type=number]:focus,select:focus{outline:none;border-color:var(--brand)}
  input[type=checkbox],input[type=radio]{accent-color:var(--brand)}
- button{background:var(--brand);color:#fff;border:0;border-radius:8px;padding:8px 16px;
-        font-size:14px;cursor:pointer;font-weight:600;font-family:inherit}
+ button{background:var(--brand);color:#fff;border:0;border-radius:8px;padding:6px 14px;
+        font-size:13px;cursor:pointer;font-weight:600;font-family:inherit}
  button:hover{background:var(--brand2)}
  button.ghost{background:rgba(255,255,255,.06);color:var(--ink);font-weight:500;
         border:1px solid rgba(255,255,255,.10)}
@@ -297,18 +314,54 @@ HTML = r"""<!doctype html>
  #progLog{background:var(--log);border:1px solid var(--line);border-radius:8px;color:#a8adb2;
       font-family:Consolas,"Microsoft YaHei",monospace}
  .out .dlrow{background:var(--log);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+ /* 语言：一个地球图标，点开才是 中文 / English（原来是个一直占位置的下拉框） */
+ .langbox{position:relative}
+ #langMenu{position:absolute;right:0;top:112%;z-index:60;background:var(--card);
+      border:1px solid var(--line);border-radius:8px;padding:4px;min-width:118px;
+      box-shadow:0 10px 24px rgba(0,0,0,.5)}
+ #langMenu button{display:block;width:100%;text-align:left;background:transparent;
+      color:var(--ink);font-weight:500;padding:7px 10px;border-radius:6px;font-size:13px}
+ #langMenu button:hover{background:rgba(255,255,255,.10)}
+ #langMenu button.on{color:#9fc0ff;background:rgba(4,50,250,.18)}
+ /* 两步走：① 板子 → 点下一步 → ② 线束（同一屏只显示当前这一步） */
+ .stepbar{display:flex;align-items:center;gap:10px;padding:5px 20px 0}
+ .stepbtn{background:rgba(255,255,255,.06);color:var(--ink2);font-weight:600;
+      border:1px solid var(--line);border-radius:20px;padding:5px 15px;font-size:13px}
+ .stepbtn:hover{background:rgba(255,255,255,.12)}
+ .stepbtn.on{background:var(--brand);border-color:var(--brand);color:#fff}
+ .steparrow{color:var(--hint);font-size:15px}
+ #stepHint{margin-left:auto;font-size:12px;color:var(--muted)}
+ .wrap.one{grid-template-columns:1fr}
+ /* 板子实时预览 */
+ .prevbox{overflow:auto;max-height:300px}
+ .prevbox svg{display:block}
+ /* 屏幕更矮（比如 1366×768 的笔记本）时再收紧一档，仍然一屏放下 */
+ @media (max-height: 790px){
+   header .sub{display:none}
+   header{padding:6px 20px}
+   .bcard .thumb{height:56px}
+   .grid{max-height:180px}
+   .bcard .nm{font-size:10px}
+   #bhaBox{max-height:86px!important}
+   .prevbox svg{height:82px!important}
+   .panel{padding:6px 12px}
+   .row{margin-top:4px}
+ }
 </style></head>
 <body>
 <header>
   <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-    <span class="logo">SC</span>
-    <h1 style="flex:0 0 auto">Single-CAD</h1>
+    <span class="logo">SL</span>
+    <h1 style="flex:0 0 auto">Single line-CAD</h1>
     <div style="flex:1 1 320px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end">
-      <select id="langSel" onchange="setLang(this.value)" title="中文 / English"
-              style="padding:5px 10px;font-size:13px">
-        <option value="zh">中文</option>
-        <option value="en">English</option>
-      </select>
+      <span class="langbox">
+        <button class="ghost" id="langBtn" onclick="toggleLang(event)"
+                title="语言 / Language" style="padding:5px 11px;font-size:15px;line-height:1">🌐</button>
+        <div id="langMenu" style="display:none">
+          <button id="langZh" onclick="setLang('zh')">中文</button>
+          <button id="langEn" onclick="setLang('en')">English</button>
+        </div>
+      </span>
       <span id="verTxt">版本 {{VER}}（{{VERNOTE}}）</span>
       <button class="ghost" id="updBtn" onclick="checkUpdate()"
               style="padding:5px 12px;font-size:13px">检查更新</button>
@@ -317,68 +370,50 @@ HTML = r"""<!doctype html>
   </div>
   <div class="sub">选块（可重复）→ 组成链 → 生成连完线的产品 · 代码版本 {{VER}}（换过代码要重启窗口，否则跑的还是旧代码）</div>
 </header>
-<div class="wrap">
-  <div class="panel"><h2>① 块库（点击加入链）</h2>
-    <div class="grid" id="blocks"></div></div>
-  <div class="panel"><h2>② 线束（可以不填：留空自动排“末端母头 + 正极支线×(串数-1) + 末端公头”；想带保险丝等串联块就把块点上来）</h2>
-    <div class="chain" id="chain"><span style="color:#aab">点左边块加入…</span></div>
-    <div class="row">
+<div class="stepbar">
+  <button class="stepbtn on" id="stepBtn1" onclick="gotoStep(1)">① 板子</button>
+  <span class="steparrow">→</span>
+  <button class="stepbtn" id="stepBtn2" onclick="gotoStep(2)">② 线束</button>
+  <span id="stepHint">先把板子这一页填好，点下面的“下一步：填线束”</span>
+</div>
+<div class="wrap one" id="step1">
+  <div class="panel"><h2>① 板子 · 块库 + 阵列</h2>
+    <div class="grid" id="boardBlocks"></div>
+    <div class="row" style="margin-top:10px">
       <label>模式</label>
       <label><input type="radio" name="mode" value="array" checked onchange="setMode('array')"> 光伏阵列 + 线束（一张图）</label>
       <label><input type="radio" name="mode" value="batch" onchange="setMode('batch')"> 批量（一行一张 · 全部拼进同一张图纸）</label>
     </div>
     <div class="row" id="arrayRow" style="display:none">
+      <label>方案</label><select id="scheme" onchange="onSchemeChange()"
+        title="方案的生成逻辑逐个补；现在只有“串的排法”按方案自动定：带 LYNX 的方案从下往上排，其余从左往右排">
+        <option value="Harness">Harness</option>
+        <option value="ALEX">ALEX</option>
+        <option value="IBEX+AI跳线">IBEX+AI跳线</option>
+        <option value="IBEX PLUS">IBEX PLUS</option>
+        <option value="IBEX+CU跳线">IBEX+CU跳线</option>
+        <option value="LYNX+CU跳线">LYNX+CU跳线</option>
+        <option value="LYNX+AI跳线">LYNX+AI跳线</option>
+        <option value="LYNX+Harness">LYNX+Harness</option>
+        <option value="LYNX+IBEX">LYNX+IBEX</option>
+      </select>
       <label>组件 首块</label><select id="mod1"></select>
       <label>中间块</label><select id="mod2"></select>
       <label>尾块</label><select id="mod3"></select>
       <label>每串板数</label><input type="number" id="nper" value="20" min="2" step="1">
-      <label>串数</label><input type="number" id="nstr" value="4" min="1" step="1">
-      <label>板间净空</label><input type="number" id="gapx" value="2" step="1">
-      <label>串间净空</label><input type="number" id="gapy" value="2" step="1">
+      <label>串数</label><input type="text" id="nstr" value="4" style="width:92px"
+        title="支持分段：4 = 一组 4 串；2+3 / 3+2 = 支架两侧各多少串，段与段之间走“跨支架距离”">
+      <label>跨支架距离</label><input type="number" id="brkgap" value="4" step="1"
+        title="串数写成分段（如 2+3）时，支架两侧之间的固定距离">
+      <label>板间/串间净空</label><input type="number" id="gapx" value="1" step="1"
+        title="板与板之间、以及串与串之间，都用这一个净空值（按你的要求：串间净空跟板间净空一致）">
       <label>串的排法</label><select id="dir">
         <option value="right">从左往右接</option>
         <option value="down">从上往下叠</option></select>
-      <label><input type="checkbox" id="link"> 画阵列↔线束跨接线</label>
-      <label><input type="checkbox" id="hspan" checked> 线束接点对齐缩放</label>
-      <label>正极支线块</label><select id="posfeed"><option value="">（选链里的块）</option></select>
-      <label>负极支线块</label><select id="negfeed"><option value="">（不指定）</option></select>
-      <label>主线线号</label><select id="awgmain" style="width:110px"
-        title="主线上标的线号（标在块与块之间的连线上）；按载流量选：线越长、串数越多用越粗的">
-        <option>750 MCM</option>
-        <option>500 MCM</option>
-        <option selected>2/0 AWG</option>
-        <option>4 AWG</option>
-        <option>6 AWG</option>
-        <option>8 AWG</option>
-        <option>10 AWG</option>
-        <option value="">（不指定）</option>
-      </select>
-      <label>支线线号</label><select id="awgbranch" style="width:100px"
-        title="支线线号（板与板之间不标字，只写进线长清单 CSV）">
-        <option selected>10 AWG</option>
-        <option>12 AWG</option>
-        <option value="">（不指定）</option>
-      </select>
-      <label>线号标注</label><select id="annot"
-        title="text=普通文字（最稳）；shape=画成标注外观（尺寸线/界线/箭头，普通实体，任何 CAD 都能开）；dim=CAD 原生 DIMENSION（可拖动关联，但 ZWCAD 2025 会判无效）">
-        <option value="text">文字</option>
-        <option value="shape">标注外观（普通实体）</option>
-        <option value="dim">CAD 原生标注(DIMENSION)</option>
-      </select>
-      <label>线束缩放</label><input type="number" id="hscale" value="1" step="0.1" min="0.05">
-      <label>FUSE间距</label><input type="number" id="fixgap" value="30" step="5">
-      <label>起始块</label><input type="text" id="headblk" value="CBX" style="width:70px" title="摆在阵列最左边、与板子固定距离的块">
+      <label>起始块</label><select id="headblk" style="max-width:130px"
+        title="摆在阵列最左边、与板子固定距离的块（默认 CBX，从**板子块库**里选）"></select>
       <label>起始块间距</label><input type="number" id="headgap" value="60" step="5">
-      <label>负极支线旋转</label><input type="number" id="negrot" value="0" step="90"
-             title="负极支线块转多少度：0=正放（插头朝上，和正极行一样，推荐）；180=翻过来挂（块看着是倒的）。公头/母头块不看这个值，自动朝链内">
-      <label>负极行间距</label><input type="number" id="neggap" value="30" step="5"
-             title="负极行和正极行的净空；负极支线块是竖的，程序会自动把它的身子让出来（行线再往下挪一个块高），不会压住正极行">
-      <label>末端公头块</label><input type="text" id="posplug" value="Male" style="width:80px"
-             title="填了就自动补到链尾、顶最后一串的正极；想让它排在头部就把这里清空、自己放进链里">
-      <label>末端母头块</label><input type="text" id="negplug" value="Fmale" style="width:80px"
-             title="填了才会自动生成负极那一行（头部公头 + 中间负极支线 + 末端母头）">
       <label><input type="checkbox" id="enlarge"> 允许放大到占满</label>
-      <label><input type="checkbox" id="tocad"> 直接画到 CAD(COM)</label>
     </div>
     <div class="row" id="bhaRow" style="display:none;flex-direction:column;align-items:stretch">
       <div class="row" style="margin-top:0;align-items:center;gap:8px">
@@ -386,11 +421,10 @@ HTML = r"""<!doctype html>
         <button class="ghost" onclick="addBha()">加一处</button>
         <button class="ghost" onclick="addBhaMid()" title="每串都在中间那块之后插一处（位置 = 每串板数 ÷ 2，四舍五入）">每串中点插一处</button>
         <button class="ghost" onclick="clearBha()">清空</button>
-        <span style="font-size:12px;color:var(--muted)">
-          在某一串的两块板之间插一个 BHA 桩块（可以再放一个电机块）；桩右边的板整体右移，
-          阵列自动变长、线束支线跟着走。串号留空 = 所有串。</span>
+        <span id="bhaHint" style="font-size:12px;color:var(--muted)">
+          两块板之间插一个 BHA 桩块（可再挂电机）；<b>串号留空 = 每段一个</b>（3+3 → 前后各一个），想每串都放写 1-6。</span>
       </div>
-      <div style="max-height:190px;overflow:auto;border:1px solid var(--line);border-radius:8px">
+      <div id="bhaBox" style="max-height:118px;overflow:auto;border:1px solid var(--line);border-radius:8px">
         <table style="width:100%;border-collapse:collapse;font-size:13px">
           <thead><tr>
             <th style="text-align:left;padding:6px">串号</th>
@@ -416,7 +450,7 @@ HTML = r"""<!doctype html>
         <button class="ghost" onclick="fillBatch()">按上面参数铺出 N 行</button>
         <button class="ghost" onclick="clearBatch()">清空行</button>
       </div>
-      <div style="max-height:250px;overflow:auto;border:1px solid var(--line);border-radius:8px">
+      <div style="max-height:130px;overflow:auto;border:1px solid var(--line);border-radius:8px">
         <table style="width:100%;border-collapse:collapse;font-size:13px">
           <thead><tr>
             <th style="text-align:left;padding:6px">图号</th>
@@ -432,9 +466,9 @@ HTML = r"""<!doctype html>
         </table>
       </div>
       <div class="row" style="margin-top:0">
-        <button onclick="genBatch()" id="batchGo">生成（全部拼进同一张图纸）</button>
-        <span style="font-size:12px;color:var(--muted)">一行 = 一张图：每张都调一份新的外框模板（互相独立），
-          全部排进同一个 DXF；在 CAD 里每张是一个整块（块名 = 图号），想挪就整块挪。</span>
+        <span style="font-size:12px;color:var(--muted)">一行 = 一张图（各调一份新外框模板，互相独立），全部拼进同一个 DXF；
+          填完点“下一步：填线束”，在线束页按“生成”一次画完。
+          每行的<b>BHA位置</b>留空 = 沿用“光伏阵列”模式下那张桩表。</span>
       </div>
     </div>
     <div class="row" id="sheetRow" style="display:none">
@@ -446,10 +480,79 @@ HTML = r"""<!doctype html>
         <option value="col">先竖后横（上→下，然后下一列）</option>
       </select>
     </div>
-    <div class="row">
+    <div class="row" style="margin-top:14px">
+      <button onclick="nextStep()">下一步：填线束 →</button>
+      <span style="font-size:12px;color:var(--muted)">
+        板子这一页填完就可以进线束那一页；想回来改，点上面的“① 板子”或线束页的“← 上一步”。</span>
+    </div>
+    <div class="row" style="margin-top:14px;flex-direction:column;align-items:stretch">
+      <div style="display:flex;align-items:center;gap:10px">
+        <b>板子预览（实时）</b>
+        <span id="prevHint" style="font-size:12px;color:var(--muted)">
+          改参数即时重画（缩到一屏）；串按<b>段</b>标注（2+3 → “2 串”“3 串”）。
+          <b style="color:#c0392b">红</b>=首块、
+          <b style="color:#8a8f94">灰</b>=中间块、
+          <b style="color:#2e7d32">绿</b>=尾块、
+          <b style="color:#1466c8">蓝</b>=BHA 桩、
+          <b style="color:#8e44ad">紫</b>=电机。</span>
+        <button class="ghost" style="margin-left:auto" onclick="doPreview()">刷新</button>
+      </div>
+      <div id="arrPrev" class="prevbox"
+           style="background:#fff;border-radius:8px;min-height:130px;padding:8px">
+        <div style="color:#727577;font-size:12px">（填完组件和串数就会出现预览）</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="wrap one" id="step2" style="display:none">
+  <div class="panel"><h2>② 线束 · 块库 + 连线（留空也能排：末端母头 + 正极支线×(串数-1) + 末端公头）</h2>
+    <div class="grid" id="harnessBlocks"></div>
+    <div class="chain" id="chain"><span style="color:#aab">点上面的线束块加入…</span></div>
+    <div class="row" id="harnRow">
+      <label>正极支线块</label><select id="posfeed"><option value="">（选链里的块）</option></select>
+      <label>负极支线块</label><select id="negfeed"><option value="">（不指定）</option></select>
+      <label>末端公头块</label><input type="text" id="posplug" value="Male" style="width:80px"
+             title="填了就自动补到链尾、顶最后一串的正极；想让它排在头部就把这里清空、自己放进链里">
+      <label>末端母头块</label><input type="text" id="negplug" value="Fmale" style="width:80px"
+             title="填了才会自动生成负极那一行（头部接头 + 中间负极支线 + 末端母头）">
+      <label>主线线号</label><select id="awgmain" style="width:110px"
+        title="主线 = 正极/负极支线块之间连的线 + 第一个接头到第一根正极/负极支线之间的连线；标的就是这个线号">
+        <option>750 MCM</option>
+        <option>500 MCM</option>
+        <option selected>2/0 AWG</option>
+        <option>4 AWG</option>
+        <option>6 AWG</option>
+        <option>8 AWG</option>
+        <option>10 AWG</option>
+        <option value="">（不指定）</option>
+      </select>
+      <label>支线线号</label><select id="awgbranch" style="width:100px"
+        title="支线 = 正极/负极支线块 + 最后一根支线块到公头/母头之间的连线；标的就是这个线号">
+        <option selected>10 AWG</option>
+        <option>12 AWG</option>
+        <option value="">（不指定）</option>
+      </select>
+      <label>线号标注</label><select id="annot"
+        title="text=普通文字（最稳）；shape=画成标注外观（尺寸线/界线/箭头，普通实体，任何 CAD 都能开）；dim=CAD 原生 DIMENSION（可拖动关联，但 ZWCAD 2025 会判无效）">
+        <option value="text">文字</option>
+        <option value="shape">标注外观（普通实体）</option>
+        <option value="dim">CAD 原生标注(DIMENSION)</option>
+      </select>
+      <label>线束缩放</label><input type="number" id="hscale" value="1" step="0.1" min="0.05">
+      <label>块固定间距</label><input type="number" id="fixgap" value="30" step="5"
+             title="除“正极支线/负极支线/公头/母头”（这四个按板子接点定位）以外，
+                    其余块（FUSE、CU-AL、起始块…）之间统一的固定间距">
+      <label>负极行间距</label><input type="number" id="neggap" value="30" step="5"
+             title="负极行和正极行的净空；负极支线块是竖的，程序会自动把它的身子让出来（行线再往下挪一个块高），不会压住正极行">
+      <label><input type="checkbox" id="link"> 画阵列↔线束跨接线</label>
+      <label><input type="checkbox" id="hspan" checked> 线束接点对齐缩放</label>
+      <label><input type="checkbox" id="pts"> 画连接点(POINT)</label>
       <label>间隔 GAP</label><input type="number" id="gap" value="40" step="5">
       <label>外框图</label><select id="frame" onchange="onFrameChange()"><option value="">不用</option></select>
+      <label><input type="checkbox" id="tocad"> 直接画到 CAD(COM)</label>
       <button onclick="gen()">生成</button>
+      <button class="ghost" onclick="gotoStep(1)">← 上一步</button>
       <button class="ghost" onclick="clearChain()">清空</button>
     </div>
     <div class="out" id="out"></div>
@@ -542,7 +645,7 @@ function RT(root){
         if(e.getAttribute(a)!==want) e.setAttribute(a,want);
       });
     }
-    if(e===document.getElementById('langSel')) return;   // 语言下拉自己不翻
+    if(e.id==='langMenu'||e.id==='langBtn') return;      // 语言菜单自己不翻
     for(let c=e.firstChild;c;c=c.nextSibling){
       if(c.nodeType===3) doText(c);
       else if(c.nodeType===1) doElem(c);
@@ -555,15 +658,36 @@ function setLang(v){
   LANG=(v==='en')?'en':'zh';
   const sel=document.getElementById('langSel');
   if(sel) sel.value=LANG;
+  const lm=document.getElementById('langMenu');
+  if(lm) lm.style.display='none';
+  langMark();
   document.documentElement.lang=(LANG==='en')?'en':'zh';
   RT(document.body);
   try{ fetch('/api/lang?set='+LANG); }catch(e){}       // 记住选择，下次开窗还是这个语言
 }
+// 语言菜单：点地球图标展开，点别处收起；当前语言高亮
+function toggleLang(ev){
+  if(ev){ev.stopPropagation();}
+  const m=document.getElementById('langMenu');
+  if(!m) return;
+  m.style.display=(m.style.display==='block')?'none':'block';
+  langMark();
+}
+function langMark(){
+  const zh=document.getElementById('langZh'), en=document.getElementById('langEn');
+  if(zh) zh.className=(LANG==='zh')?'on':'';
+  if(en) en.className=(LANG==='en')?'on':'';
+}
+document.addEventListener('click',function(){
+  const m=document.getElementById('langMenu'); if(m) m.style.display='none';
+});
 
 let chain=[];
 let lastOut={dxf:'', csv:''};   // 最近一次生成的文件名（桌面窗口的“保存/打开”要用）
 let framesReady=false;
-let lastBlocks=[];      // 块库里所有块名（给“正极/负极支线块”下拉用）
+let lastBlocks=[];      // 块库里所有块名（给 BHA 桩/电机下拉用）
+let boardBlocks=[];     // 板子块库（画板子/阵列用）
+let harnessBlocks=[];   // 线束块库（组成线束链用）
 let mode='array';
 let frameList=[];       // 外框图列表（批量模式的外框图下拉要用）
 let batchRows=[];       // 批量模式：一行 = 一张图（各自独立参数）
@@ -573,10 +697,107 @@ const AWG_BRANCH=['10 AWG','12 AWG'];
 function setMode(m){
   mode=(m==='batch')?'batch':'array';
   document.getElementById('arrayRow').style.display='flex';
-  document.getElementById('bhaRow').style.display='flex';
+  // 批量那一页内容多（BHA 表 + 批量表 + 预览），整页要一屏放下，所以批量模式下
+  // 把 BHA 表收起来 —— 批量表每行本来就有“BHA位置”一列，电机/BHA 在那一列里填；
+  // 想统一设一套，就先在“光伏阵列”模式下把桩表填好，批量行留空就会沿用它。
+  document.getElementById('bhaRow').style.display=(mode==='batch')?'none':'flex';
   document.getElementById('batchRow').style.display=(mode==='batch')?'flex':'none';
   document.getElementById('sheetRow').style.display=(mode==='batch')?'flex':'none';
+  // 批量模式内容多，把两行说明收起来，保证整页还是“一屏放下”（不用上下滚）
+  ['bhaHint','prevHint'].forEach(function(id){
+    const e=document.getElementById(id); if(e) e.style.display=(mode==='batch')?'none':'';
+  });
+  const bb=document.getElementById('bhaBox');      // 批量页内容多，桩表压矮一点
+  if(bb) bb.style.maxHeight=(mode==='batch')?'64px':'118px';
   RT();
+}
+
+// ---------- 两步走：① 板子 → 下一步 → ② 线束 ----------
+let step=1;
+function gotoStep(n){
+  step=(n===2)?2:1;
+  const s1=document.getElementById('step1'), s2=document.getElementById('step2');
+  if(s1) s1.style.display=(step===1)?'grid':'none';
+  if(s2) s2.style.display=(step===2)?'grid':'none';
+  const b1=document.getElementById('stepBtn1'), b2=document.getElementById('stepBtn2');
+  if(b1) b1.className='stepbtn'+(step===1?' on':'');
+  if(b2) b2.className='stepbtn'+(step===2?' on':'');
+  const h=document.getElementById('stepHint');
+  if(h) h.textContent=T(step===1?
+      '先把板子这一页填好，点下面的“下一步：填线束”':
+      '这一页填线束（线号、支线块、末端接头），填完按“生成”');
+  RT(document.querySelector('.stepbar'));
+  try{ window.scrollTo(0,0); }catch(e){}
+  if(step===1) schedulePreview();     // 回到板子页就把预览刷新一下
+}
+// 进线束页之前做个轻检查：板子关键项没填就先提醒一下
+function nextStep(){
+  const m1=document.getElementById('mod1'), m3=document.getElementById('mod3');
+  if(m1 && !m1.value){ alert(T('板子：先选“组件 首块”')); return; }
+  if(m3 && !m3.value){ alert(T('板子：先选“尾块”')); return; }
+  const ns=document.getElementById('nstr');
+  if(ns && !String(ns.value||'').trim()){ alert(T('板子：串数没填')); return; }
+  gotoStep(2);
+}
+
+// ---------- 板子实时预览 ----------
+// 改任何一个板子参数 -> 350ms 防抖 -> 调 /api/preview_array -> 换掉预览。
+// 后端只算布局（不读外框图、不打包、不出 DXF），所以是毫秒级的。
+let prevTimer=null, prevSeq=0;
+const PREV_IDS=['scheme','mod1','mod2','mod3','nper','nstr','brkgap','gapx','gapy',
+                'dir','headblk','headgap'];
+function bindPreview(){
+  // 最外层兜底：板子这一页里**任何**输入/下拉改了都重画预览。
+  // 电机/BHA 桩那张表是动态生成的行，按固定 id 绑不住（以前就是漏了这里，
+  // 所以“桩插在第几块之后”改了、预览却一直停在原地不动）。
+  const s1=document.getElementById('step1');
+  if(s1){
+    s1.addEventListener('input',schedulePreview);
+    s1.addEventListener('change',schedulePreview);
+  }
+  PREV_IDS.forEach(function(id){
+    const e=document.getElementById(id); if(!e) return;
+    e.addEventListener('input',schedulePreview);
+    e.addEventListener('change',schedulePreview);
+  });
+}
+function schedulePreview(){
+  if(step!==1) return;
+  if(prevTimer) clearTimeout(prevTimer);
+  prevTimer=setTimeout(doPreview, 350);
+}
+async function doPreview(){
+  if(prevTimer){clearTimeout(prevTimer);prevTimer=null;}
+  const box=document.getElementById('arrPrev'); if(!box) return;
+  const my=++prevSeq;
+  box.innerHTML='<div style="color:#727577;font-size:12px;padding:6px">更新中…</div>';
+  const body={scheme:v('scheme','Harness'),
+              module_first:v('mod1',''), module_mid:v('mod2',''), module_last:v('mod3',''),
+              n_per:parseInt(v('nper',20))||20,
+              n_strings:String(v('nstr','4')||'4').trim(),
+              bracket_gap:parseFloat(v('brkgap',4))||4,
+              gap_x:parseFloat(v('gapx',1))||0,
+              // 串间净空跟板间净空一致（界面不再分开填；null = 跟随板间净空）
+              gap_y:null,
+              dir:v('dir','right'),
+              head_block:String(v('headblk','CBX')||'').trim(),
+              head_gap:parseFloat(v('headgap',60))||60,
+              bha:bhaPayload()};
+  try{
+    const r=await fetch('/api/preview_array',{method:'POST',
+              headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const d=await r.json();
+    if(my!==prevSeq) return;                  // 后发的请求已经把这次挤掉了，丢弃
+    box.innerHTML=(d.svg||'<div style="color:#727577;font-size:12px;padding:6px">'
+                  +T(d.info||'没有预览')+'</div>')
+                 + (d.svg&&d.info? '<div style="font-size:12px;color:#727577;padding:6px 2px">'
+                    +T(d.info)+'</div>' : '');
+    RT(box);
+  }catch(e){
+    if(my===prevSeq)
+      box.innerHTML='<div style="color:#e57373;font-size:12px;padding:6px">预览失败：'
+                    +e+'</div>';
+  }
 }
 async function loadBlocks(){
   const fs=document.getElementById('frame');
@@ -590,29 +811,61 @@ async function loadBlocks(){
     if((d.frames||[]).length){ fs.value=d.frames[0]; return loadBlocks(); }
   }
   const picks=[['mod1','PV-POS'],['mod2','MIDDLE-PV'],['mod3','END-NEG']];
+  const all=(d.blocks||[]);
+  lastBlocks=all.map(b=>b.name);
+  // 两块库分开：画板子的块归 ①板子，画线束的块归 ②线束（后端 /api/blocks 给 group）
+  boardBlocks=all.filter(b=>b.group==='board');
+  harnessBlocks=all.filter(b=>b.group!=='board');
   picks.forEach(([id,def])=>{
     const ms=document.getElementById(id);
-    if(!ms || ms.options.length) return;
-    d.blocks.forEach(b=>{ const o=document.createElement('option'); o.value=b.name; o.textContent=b.name; ms.appendChild(o); });
+    if(!ms) return;
+    const old=ms.value;
+    ms.innerHTML='';
+    boardBlocks.forEach(b=>{ const o=document.createElement('option'); o.value=b.name; o.textContent=b.name; ms.appendChild(o); });
     const want=[...ms.options].find(o=>o.value===def);
-    if(want) ms.value=def;
+    if(old && [...ms.options].some(o=>o.value===old)) ms.value=old;
+    else if(want) ms.value=def;
   });
-  const g=document.getElementById('blocks'); g.innerHTML='';
-  lastBlocks=(d.blocks||[]).map(b=>b.name);
+  // “起始块”从板子块库里选（默认 CBX）
+  const hb=document.getElementById('headblk');
+  if(hb){
+    const old=hb.value;
+    hb.innerHTML='';
+    const o0=document.createElement('option'); o0.value=''; o0.textContent='（不用）'; hb.appendChild(o0);
+    boardBlocks.forEach(b=>{const o=document.createElement('option');o.value=b.name;o.textContent=b.name;hb.appendChild(o);});
+    const has=(x)=>[...hb.options].some(o=>o.value===x);
+    hb.value=(old && has(old))?old:(has('CBX')?'CBX':'');
+  }
+  renderLib('boardBlocks', boardBlocks, false);
+  renderLib('harnessBlocks', harnessBlocks, true);
+  // 启动时就把“正极支线块 / 负极支线块”下拉填上。
+  // 以前这里没调 renderChain()，那两个下拉要等你**先点一个块**才会有内容 ——
+  // 看着就是“下拉里什么都没有”。
+  renderChain();
   renderBha();                      // BHA 桩块/电机块下拉从整个块库里选
-  d.blocks.forEach(b=>{
+  RT();
+  schedulePreview();                // 块库到位了，把板子预览先画一张
+}
+// 画一块库：clickable=true 的块点一下加进线束链；板子块只用来在上面几个下拉里选
+function renderLib(id, list, clickable){
+  const g=document.getElementById(id); if(!g) return;
+  g.innerHTML='';
+  (list||[]).forEach(b=>{
     const c=document.createElement('div'); c.className='bcard';
     const badge=(b.src==='lib')?'<span class="badge" title="来自块库，生成时自动并入外框">库</span>':'';
     c.innerHTML='<div class="thumb">'+(b.svg||'')+'</div>'+'<div class="nm">'+b.name+badge+'</div>';
-    c.onclick=()=>{chain.push(b.name); renderChain();};
+    if(clickable){ c.onclick=()=>{chain.push(b.name); renderChain();}; }
+    else{
+      c.style.cursor='default';
+      c.title='板子块：在上面的“组件 首块 / 中间块 / 尾块 / 起始块”里选';
+    }
     g.appendChild(c);
   });
-  RT();
 }
 function onFrameChange(){ chain=[]; renderChain(); loadBlocks(); }
 function renderChain(){
   const c=document.getElementById('chain');
-  if(!chain.length){c.innerHTML='<span style="color:#aab">点左边块加入…</span>';}
+  if(!chain.length){c.innerHTML='<span style="color:#aab">点上面的线束块加入…</span>';}
   else{
     c.innerHTML='';
     chain.forEach((n,i)=>{
@@ -622,9 +875,9 @@ function renderChain(){
       c.appendChild(d);
     });
   }
-  // “正极/负极支线块”从**整个块库**里选（不是只从链里选，否则没进链的块就没法指定）
+  // “正极/负极支线块”从**线束块库**里选（不是只从链里选，否则没进链的块就没法指定）
   const uniq=[...new Set(chain)];
-  const lib=[...new Set(uniq.concat(lastBlocks))];
+  const lib=[...new Set(uniq.concat((harnessBlocks||[]).map(b=>b.name)))];
   [['posfeed','（选块）'],['negfeed','（不指定）']].forEach(function(pair){
     const id=pair[0], blank=pair[1];
     const s=document.getElementById(id); if(!s) return;
@@ -674,34 +927,42 @@ function progStop(finalText){
 }
 // 阵列模式的一组公共参数（阵列模式与批量模式共用；批量模式每行再覆盖串数/板数）
 function arrayCommon(){
-  return {harness:chain, gap:parseFloat(document.getElementById('gap').value)||40,
-          module_first:document.getElementById('mod1').value,
-          module_mid:document.getElementById('mod2').value,
-          module_last:document.getElementById('mod3').value,
-          n_per:parseInt(document.getElementById('nper').value)||20,
-          n_strings:parseInt(document.getElementById('nstr').value)||1,
-          gap_x:parseFloat(document.getElementById('gapx').value)||0,
-          gap_y:parseFloat(document.getElementById('gapy').value)||0,
-          dir:document.getElementById('dir').value,
-          harness_scale:parseFloat(document.getElementById('hscale').value)||1,
-          fixed_gap:parseFloat(document.getElementById('fixgap').value)||30,
-          head_block:document.getElementById('headblk').value.trim(),
-          head_gap:parseFloat(document.getElementById('headgap').value)||30,
-          neg_rotate:(document.getElementById('negrot')?
-                      (parseFloat(document.getElementById('negrot').value)||0):0),
-          neg_gap:(document.getElementById('neggap')?
-                   (parseFloat(document.getElementById('neggap').value)||30):30),
-          pos_plug:document.getElementById('posplug').value.trim(),
-          neg_plug:document.getElementById('negplug').value.trim(),
-          link_array:document.getElementById('link').checked,
-          match_span:document.getElementById('hspan').checked,
-          pos_feeder:document.getElementById('posfeed').value.trim(),
-          neg_feeder:document.getElementById('negfeed').value.trim(),
-          awg_main:document.getElementById('awgmain').value.trim(),
-          awg_branch:document.getElementById('awgbranch').value.trim(),
-          annot:(document.getElementById('annot')||{}).value||'text',
-          allow_enlarge:document.getElementById('enlarge').checked,
+  return {harness:chain, gap:parseFloat(v('gap',40))||40,
+          scheme:v('scheme','Harness'),
+          module_first:v('mod1',''), module_mid:v('mod2',''), module_last:v('mod3',''),
+          n_per:parseInt(v('nper',20))||20,
+          // 串数允许写成分段：4 / 2+3 / 3+2（段间走“跨支架距离”）
+          n_strings:String(v('nstr','4')||'4').trim(),
+          bracket_gap:parseFloat(v('brkgap',4))||4,
+          gap_x:parseFloat(v('gapx',1))||0,
+          gap_y:null,              // 串间净空跟板间净空一致
+          dir:v('dir','right'),
+          harness_scale:parseFloat(v('hscale',1))||1,
+          fixed_gap:parseFloat(v('fixgap',30))||30,
+          head_block:String(v('headblk','CBX')||'').trim(),
+          head_gap:parseFloat(v('headgap',60))||60,
+          // 负极支线块不再填角度：程序按“接线头对准板子负极”自动摆
+          neg_rotate:0,
+          neg_gap:parseFloat(v('neggap',30))||30,
+          pos_plug:String(v('posplug','Male')||'').trim(),
+          neg_plug:String(v('negplug','Fmale')||'').trim(),
+          link_array:ck('link'),
+          match_span:ck('hspan',true),
+          draw_points:ck('pts'),        // 默认不画：图里不需要点
+          pos_feeder:String(v('posfeed','')||'').trim(),
+          neg_feeder:String(v('negfeed','')||'').trim(),
+          awg_main:String(v('awgmain','')||'').trim(),
+          awg_branch:String(v('awgbranch','')||'').trim(),
+          annot:v('annot','text')||'text',
+          allow_enlarge:ck('enlarge'),
           bha:bhaPayload()};
+}
+// 方案的生成逻辑逐个补；现在只有“串的排法”按方案自动定：
+// 带 LYNX 的方案从下往上排，其余方案从左往右排。
+function onSchemeChange(){
+  const s=document.getElementById('scheme'); if(!s) return;
+  const d=document.getElementById('dir'); if(!d) return;
+  d.value=(String(s.value).toUpperCase().indexOf('LYNX')>=0)?'down':'right';
 }
 
 // ---------- 电机 / BHA 桩位置（一行 = 一处插入） ----------
@@ -732,13 +993,17 @@ function renderBha(){
   bhaRows.forEach((r,i)=>{
     const tr=document.createElement('tr'); tr.style.borderTop='1px solid var(--line)';
     const td=()=>{const c=document.createElement('td');c.style.padding='4px';tr.appendChild(c);return c;};
-    let c=td(), e=document.createElement('input');
-    e.type='text'; e.value=r.s; e.placeholder='全部';
-    e.title='串号：留空=所有串；也可以写 1,3 或 2-4';
-    e.style.width='70px'; e.oninput=()=>{r.s=e.value;}; c.appendChild(e);
-    c=td(); e=document.createElement('input'); e.type='number'; e.min='0'; e.step='1';
-    e.value=r.after; e.title='插在第几块之后：0=第 1 块之前；填得比每串板数大就排到最后';
-    e.style.width='90px'; e.oninput=()=>{r.after=e.value;}; c.appendChild(e);
+    // 注意：每个输入框必须是**各自的 const**。
+    // 以前这里所有格子共用同一个 let e，回调里写 e.value 读到的其实是**最后一个**
+    // 输入框（备注）的值 —— 于是“插在第几块之后”填什么都会被存成空串（=0），
+    // 桩永远排在每串最前面；串号、电机旋转也一样读错框。
+    let c=td(); const eS=document.createElement('input');
+    eS.type='text'; eS.value=r.s; eS.placeholder='全部';
+    eS.title='串号：留空=所有串；也可以写 1,3 或 2-4';
+    eS.style.width='70px'; eS.oninput=()=>{r.s=eS.value;}; c.appendChild(eS);
+    c=td(); const eA=document.createElement('input'); eA.type='number'; eA.min='0'; eA.step='1';
+    eA.value=r.after; eA.title='插在第几块之后：0=第 1 块之前；填得比每串板数大就排到最后';
+    eA.style.width='90px'; eA.oninput=()=>{r.after=eA.value;}; c.appendChild(eA);
     [['stub','（桩块）'],['motor','（不带电机）']].forEach(function(pair){
       const key=pair[0], blank=pair[1];
       const cc=td(); const s=document.createElement('select'); s.style.maxWidth='150px';
@@ -749,9 +1014,9 @@ function renderBha(){
         const o=document.createElement('option'); o.value=r[key]; o.textContent=r[key]; s.appendChild(o); }
       s.value=r[key]||''; s.onchange=()=>{r[key]=s.value;}; cc.appendChild(s);
     });
-    c=td(); e=document.createElement('input'); e.type='number'; e.step='90';
-    e.value=r.rot; e.title='电机块绕插入点转多少度（0 / 90 / 180 / 270）';
-    e.style.width='70px'; e.oninput=()=>{r.rot=e.value;}; c.appendChild(e);
+    c=td(); const eR=document.createElement('input'); eR.type='number'; eR.step='90';
+    eR.value=r.rot; eR.title='电机块绕插入点转多少度（0 / 90 / 180 / 270）';
+    eR.style.width='70px'; eR.oninput=()=>{r.rot=eR.value;}; c.appendChild(eR);
     [['gap_l','跟随板间净空'],['gap_r','跟随板间净空']].forEach(function(pair){
       const key=pair[0], ph=pair[1];
       const cc=td(); const ee=document.createElement('input'); ee.type='number'; ee.step='1';
@@ -759,13 +1024,14 @@ function renderBha(){
       ee.title='桩这一侧的净空；留空=跟随“板间净空”';
       ee.style.width='80px'; ee.oninput=()=>{r[key]=ee.value;}; cc.appendChild(ee);
     });
-    c=td(); e=document.createElement('input'); e.type='text';
-    e.value=r.note||''; e.style.width='100%'; e.oninput=()=>{r.note=e.value;}; c.appendChild(e);
+    c=td(); const eN=document.createElement('input'); eN.type='text';
+    eN.value=r.note||''; eN.style.width='100%'; eN.oninput=()=>{r.note=eN.value;}; c.appendChild(eN);
     c=td(); const b=document.createElement('button'); b.className='ghost'; b.textContent='删';
     b.onclick=()=>{bhaRows.splice(i,1);renderBha();}; c.appendChild(b);
     tb.appendChild(tr);
   });
   RT(document.getElementById('bhaRow'));
+  schedulePreview();                // 桩表改了，预览跟着重画
 }
 
 // ---------- 批量（一行 = 一张图，逐张独立） ----------
@@ -798,8 +1064,9 @@ function renderBatch(){
     c=td(); const s=document.createElement('select'); s.style.maxWidth='240px';
     ['',...(frameList||[])].forEach(f=>{const o=document.createElement('option');o.value=f;o.textContent=f||'（不选）';s.appendChild(o);});
     s.value=r.frame||''; s.onchange=()=>{r.frame=s.value;}; c.appendChild(s);
-    c=td(); e=document.createElement('input'); e.type='number'; e.min='1';
-    e.value=r.n_str; e.style.width='70px'; e.oninput=()=>{r.n_str=parseInt(e.value)||1;}; c.appendChild(e);
+    c=td(); e=document.createElement('input'); e.type='text';
+    e.value=r.n_str; e.style.width='70px'; e.title='串数：4 或 2+3（分段，段间走跨支架距离）';
+    e.oninput=()=>{r.n_str=String(e.value||'').trim()||'1';}; c.appendChild(e);
     c=td(); e=document.createElement('input'); e.type='number'; e.min='1';
     e.value=r.n_per; e.style.width='70px'; e.oninput=()=>{r.n_per=parseInt(e.value)||1;}; c.appendChild(e);
     // 每张图自己的线号：留空 = 沿用上面“主线线号/支线线号”那套
@@ -905,6 +1172,8 @@ async function fileAct(act, name){
 }
 loadBlocks();
 setMode('array');
+gotoStep(1);            // 两步走：先板子，填完点“下一步”到线束
+bindPreview();          // 板子参数一改就重画预览
 setLang(LANG);          // 按上次选的语言把界面刷一遍（默认中文，等于没改）
 
 // ---------- 在线更新 ----------
@@ -946,8 +1215,12 @@ def array_spec(req, over=None):
                 module_first=req.get("module_first", ""),
                 module_mid=req.get("module_mid", ""),
                 module_last=req.get("module_last", ""),
-                n_strings=req.get("n_strings", 1), gap_x=req.get("gap_x", 2),
-                gap_y=req.get("gap_y", 30), dir=req.get("dir", "right"),
+                n_strings=req.get("n_strings", 1), gap_x=req.get("gap_x", 1),
+                # dir 留空时由生成器按方案定（带 LYNX 的方案从下往上排，其余从左往右）
+                # 串间净空留空 = 跟板间净空一致（界面上已合并成一个值）
+                gap_y=(req.get("gap_y") or None), dir=(req.get("dir") or None),
+                scheme=req.get("scheme", "Harness"),
+                bracket_gap=req.get("bracket_gap", 4.0),
                 harness_scale=req.get("harness_scale", 1.0),
                 fixed_gap=req.get("fixed_gap", 30.0),
                 head_block=req.get("head_block", ""),
@@ -966,6 +1239,7 @@ def array_spec(req, over=None):
                 neg_gap=req.get("neg_gap", 30.0),
                 bha=req.get("bha", []),
                 allow_enlarge=bool(req.get("allow_enlarge")),
+                draw_points=bool(req.get("draw_points")),
                 keep_from=(os.path.join(OUTDIR, os.path.basename(req["keep_from"]))
                            if req.get("keep_from") else ""))
     for k, v in (over or {}).items():
@@ -1082,7 +1356,8 @@ class Handler(BaseHTTPRequestHandler):
             for name in list_blocks():
                 if name in in_frame:
                     continue
-                out.append({"name": name, "svg": wr.block_file_svg(name), "src": "lib"})
+                out.append({"name": name, "svg": wr.block_file_svg(name), "src": "lib",
+                            "group": block_group(name)})
             outs = []
             if os.path.isdir(OUTDIR):
                 fs = [f for f in os.listdir(OUTDIR) if f.lower().endswith(".dxf")]
@@ -1144,7 +1419,21 @@ class Handler(BaseHTTPRequestHandler):
             self._generate_array(); return
         if self.path == "/api/generate_batch":
             self._generate_batch(); return
+        if self.path == "/api/preview_array":
+            self._preview_array(); return
         self._send(404, b"not found")
+
+
+    def _preview_array(self):
+        """板子布局的实时预览：只算布局，不读外框图、不出文件、不连 CAD。"""
+        try:
+            ln = int(self.headers.get("Content-Length", 0))
+            req = json.loads(self.rfile.read(ln).decode("utf-8")) if ln else {}
+            svg, info = wr.array_preview_svg(array_spec(req))
+        except Exception as ex:
+            svg, info = "", "预览失败：%s: %s" % (type(ex).__name__, ex)
+        self._send(200, json.dumps({"svg": svg, "info": info}).encode("utf-8"),
+                   "application/json")
 
 
     def _generate_array(self):
@@ -1164,8 +1453,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps({"svg": "", "log": ["阵列模式必须先选外框图"]}
                                        ).encode("utf-8"), "application/json"); return
         spec = array_spec(req)
+        _st = {}                       # build_array_frame 回填“这张图用了哪些块”
         text, log, wires = wr.build_array_frame(os.path.join(FRAMES_DIR, frame_name), spec,
-                                                log=_box["log"], progress=pg)
+                                                log=_box["log"], progress=pg, stats=_st)
         _box["log"] = log          # 后面 CAD 那段继续往这个列表里追加，界面能看到
         if not text:
             PROGRESS["running"] = False
@@ -1188,16 +1478,18 @@ class Handler(BaseHTTPRequestHandler):
         if req.get("to_cad"):
             log.append("—— 画到 CAD ——")
             dwg = os.path.join(FRAMES_DIR, os.path.splitext(frame_name)[0] + ".dwg")
+            _blks = set(_st.get("blocks") or [])
+            if not _blks:
+                log.append("⚠ 拿不到这张图用到的块清单，画到 CAD 时按全部块回放")
             try:
                 cd.draw_dxf_into_cad(outpath, dwg, log,
                                      use_original=bool(req.get("cad_original")),
                                      copy_dir=OUTDIR,
-                                       only_blocks=set(
-                                           [x for x in (spec["module"], spec["module_first"],
-                                                       spec["module_mid"], spec["module_last"])
-                                            if x] + list(spec["harness"])
-                                           + wr.bha_block_names(spec.get("bha"),
-                                                                int(spec.get("n_strings") or 0))),
+                                       # 只回放**这张图真正画出来的块**（由生成器回填）。
+                                       # 以前是按界面参数自己拼名单，自动补出来的
+                                       # 起始块(CBX)/公头/母头/负极支线不在名单里，
+                                       # 画到 CAD 时就整条丢了 —— 现在不会了。
+                                       only_blocks=(_blks or None),
                                        progress=pg)
             except Exception as ex:
                 import traceback
@@ -1250,7 +1542,15 @@ class Handler(BaseHTTPRequestHandler):
                 log.append("—— 第 %d/%d 张 %s：没选外框图，跳过 ——" % (n, len(rows), no))
                 continue
             try:                       # 每行单独的串数/板数/线号；空着沿用界面上那套
-                over = {"n_strings": int(row.get("n_strings") or 0) or None,
+                # 串数允许写成分段（2+3），所以按字符串原样传，解析交给生成器
+                # 注意：界面批量表的列名是 n_str，命令行/接口那边写 n_strings —— 两个都认。
+                # （以前只读 n_strings，于是**每一张图都在用界面上的串数**，
+                #   “批量每行单独填串数”等于没生效 —— 这就是批量图和单独生成对不上的原因之一）
+                _nv = row.get("n_strings")
+                if _nv is None:
+                    _nv = row.get("n_str")
+                _ns = "" if _nv is None else str(_nv).strip()
+                over = {"n_strings": (_ns or None),
                         "n_per": int(row.get("n_per") or 0) or None,
                         "awg_main": str(row.get("awg_main") or "").strip() or None,
                         "awg_branch": str(row.get("awg_branch") or "").strip() or None,
@@ -1333,12 +1633,12 @@ def main():
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--browser", action="store_true",
                     help="强制用浏览器打开（默认：能开桌面窗口就用桌面窗口）")
-    ap.add_argument("--title", default="Single-CAD")
+    ap.add_argument("--title", default="Single line-CAD")
     args = ap.parse_args()
 
     httpd, port = make_server(args.port)
     url = "http://127.0.0.1:%d" % port
-    print("Single-CAD 已启动:", url)
+    print("Single line-CAD 已启动:", url)
     print("代码版本:", code_version(), "(改过代码要重启本进程才生效)")
     print("块库:", BLOCKS_DIR)
     print("输出:", OUTDIR)

@@ -22,7 +22,7 @@ import sys
 import urllib.request
 
 ROOT = os.path.dirname(os.path.abspath(os.path.dirname(__file__)))
-OWNER, REPO, BRANCH = "cszmw2k6dk-design", "single-cad", "main"
+OWNER, REPO, BRANCH = "cszmw2k6dk-design", "single-line-cad", "main"
 API = "https://api.github.com"
 
 
@@ -52,7 +52,7 @@ def api(method, path, tok, body=None):
     req = urllib.request.Request(API + path, data=data, method=method, headers={
         "Authorization": "Bearer " + tok,
         "Accept": "application/vnd.github+json",
-        "User-Agent": "single-cad-push",
+        "User-Agent": "single-line-cad-push",
         "Content-Type": "application/json",
     })
     with urllib.request.urlopen(req, timeout=60) as r:

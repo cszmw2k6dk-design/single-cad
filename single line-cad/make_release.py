@@ -26,7 +26,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)              # git 仓库根（上一级）
 VERSION_PATH = os.path.join(HERE, "version.json")   # 和程序代码同目录（客户端就找这）
 
-GH_OWNER, GH_REPO, GH_BRANCH = "cszmw2k6dk-design", "single-cad", "main"
+GH_OWNER, GH_REPO, GH_BRANCH = "cszmw2k6dk-design", "single-line-cad", "main"
 ARCHIVE = "https://codeload.github.com/%s/%s/zip/refs/heads/%s" % (GH_OWNER, GH_REPO, GH_BRANCH)
 
 

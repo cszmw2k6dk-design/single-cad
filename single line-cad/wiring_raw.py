@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-wiring_raw.py -- Single-CAD【不展平】：把块里的实体原样搬运(仅整体平移)，保留所有实体类型。
+wiring_raw.py -- Single line-CAD【不展平】：把块里的实体原样搬运(仅整体平移)，保留所有实体类型。
 
 原理：
   - 以第一个块文件作为“容器”(host)，保留它的 HEADER/TABLES/BLOCKS(含嵌套块/图层定义)。
@@ -386,6 +386,29 @@ def _prims_bbox(prims):
         elif p[0] == "text":
             xs.append(p[1]); ys.append(p[2])
     return (min(xs), max(xs), min(ys), max(ys)) if xs else None
+
+
+def shift_prims(prims, dx, dy):
+    """把展平图元整体平移（预览用；不改原列表）。"""
+    out = []
+    for p in prims:
+        if p[0] == "poly":
+            out.append(("poly", [(x + dx, y + dy) for x, y in p[1]],
+                        p[2], p[3] if len(p) > 3 else "",
+                        p[4] if len(p) > 4 else 0))
+        elif p[0] == "circle":
+            out.append(("circle", p[1] + dx, p[2] + dy, p[3],
+                        p[4] if len(p) > 4 else "", p[5] if len(p) > 5 else 0))
+        elif p[0] == "text":
+            out.append(("text", p[1] + dx, p[2] + dy, p[3], p[4],
+                        p[5] if len(p) > 5 else "", p[6] if len(p) > 6 else 0))
+    return out
+
+
+def rect_prims(x0, y0, x1, y1, layer="0", color=0):
+    """一个方框（预览里的“一块板/一个桩”）。"""
+    return [("poly", [(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)],
+             True, layer, color)]
 
 
 def _records_bbox(records, blocks):
@@ -1179,16 +1202,30 @@ def build_multi_frame(items, cols=2, gap_x=0.0, gap_y=0.0, order="row",
         need += [x for x in (sp.get("harness") or []) if x]
     base, secB, _fr = _pack_missing(base, secB, list(dict.fromkeys(need)), log)
 
-    # 每张的纸面尺寸（排格子用）
+    # 每张的**实际范围**（排格子用）
+    #
+    # 以前这里量的是外框模板里的“纸边矩形”，可模板 ENTITIES 里的 Frame1 块实际
+    # 范围比纸边大得多（模板里带了图框以外的东西）：格子按 1652 宽算，单张却有
+    # 6890 宽 —— 几张图直接糊在彼此身上。这就是“批量画出来的图和单独生成的完全
+    # 不一样”的原因。现在改成量**这张图生成之后的真实范围**，排出来不会叠。
     rects = {}
     for sh in sheets:
-        f = sh["frame"]
-        if f not in rects:
-            rects[f] = sheet_rect_of(f)
-        if not rects[f][0]:
-            log.append("⚠ %s 量不出纸面大小，按 0 算" % os.path.basename(f))
-            rects[f] = ((0.0, 0.0, 0.0, 0.0), rects[f][1])
-        sh["rect"], sh["rect_kind"] = rects[f]
+        r = None
+        try:
+            _sS, _oS = parse_sections_text(sh["text"])
+            r = _records_bbox(group_entities(_sS.get("ENTITIES", [])),
+                              _blocks_map(_sS))
+        except Exception as ex:
+            log.append("⚠ %s 量不出内容范围(%s)" % (sh["name"], ex))
+        if not r:
+            r, kind = sheet_rect_of(sh["frame"])
+            log.append("⚠ %s 量不出内容范围，退回按%s算" % (sh["name"], kind))
+        if not r:
+            r = (0.0, 0.0, 0.0, 0.0)
+        sh["rect"] = r
+        rects[sh["name"]] = (r, "内容")
+        log.append("拼图：%s 单张范围 %.0f × %.0f（x %.0f..%.0f，y %.0f..%.0f）"
+                   % (sh["name"], r[1] - r[0], r[3] - r[2], r[0], r[1], r[2], r[3]))
     base = _clear_entities(base)
     skip = {n.upper() for n in _br_names(secB.get("TABLES", []))}
 
@@ -1584,7 +1621,57 @@ def bha_block_names(v, n_str=0):
     return out
 
 
-def _place_array(tmpls, n_strings, pitch, gap, s_gap, dir="right"):
+def parse_string_groups(v, dflt=1):
+    """串数 -> 分组列表。
+
+    "4" = 一组 4 串；"2+3" / "3+2" = 支架左边 2 串、右边 3 串（**段与段之间**
+    是“跨支架距离”，段内部才是“串间净空”）。返回 [2, 3] 这样的列表。
+    """
+    if isinstance(v, (list, tuple)):
+        out = [int(x) for x in v if str(x).strip().isdigit() and int(x) > 0]
+        return out or [max(1, int(dflt))]
+    s = str(v if v is not None else "").strip()
+    if not s:
+        return [max(1, int(dflt))]
+    out = []
+    for p in re.split(r"[+＋,，;；\s]+", s):
+        if p.isdigit() and int(p) > 0:
+            out.append(int(p))
+    return out or [max(1, int(dflt))]
+
+
+def bha_group_starts(groups):
+    """串数分段（如 [2,4]）时，每一段的**第一串**的 0 基串号。"""
+    out, i = [], 0
+    for g in (groups or [1]):
+        out.append(i)
+        i += max(1, int(g))
+    return out
+
+
+def bha_group_expand(bha, groups):
+    """把“串号留空 / 全部”的 BHA/电机条目收缩成**每一段一条**。
+
+    为什么：串数写成 3+3 这种分段时，物理上是**一个支架（一段）配一个电机** ——
+    前面那 3 串一个、后面那 3 串一个。以前留空 = 每一串都插一个（3+3 会插 6 个），
+    现在 = 每段一个：3+3 → 2 个、2 → 1 个、2+4 → 2 个。
+    明确写了串号的条目**原样不动**（写 1-6 就还是每串一个，写 2 就只放第 2 串）。
+    返回 (新列表, 是否收缩过)。
+    """
+    starts = bha_group_starts(groups)
+    changed = False
+    out = []
+    for e in bha or []:
+        if e.get("strings") is None and starts:
+            e = dict(e)
+            e["strings"] = set(starts)
+            changed = True
+        out.append(e)
+    return out, changed
+
+
+def _place_array(tmpls, n_strings, pitch, gap, s_gap, dir="right",
+                 groups=None, group_gap=None):
     """排“串 × 槽位”阵列（单位空间，k=1）。返回 (cells, 内容包围盒)。
 
     tmpls：**每串一份**块序列（len = 串数）。序列里除了组件块，还可以有 BHA 桩
@@ -1596,6 +1683,8 @@ def _place_array(tmpls, n_strings, pitch, gap, s_gap, dir="right"):
     s_gap：串与串之间的净空。
     dir  ："right" = 每串一行、第 1 串在最左，下一串接在右边；
            "down"  = 每串一行、第 1 串在最上，下一串叠在下面。
+    groups：串的分段（如 [2,3] = 支架左边 2 串 + 右边 3 串）。给了就按段排：
+            段**内部**用 s_gap（串间净空），**段与段之间**用 group_gap（跨支架距离）。
 
     桩把一串断开：桩左边留它自己的 gap_l、右边留 gap_r（默认 = 板间净空），
     所以它右边的板整体右移（位移 = 桩宽 + 左净空 + 右净空 - 板间净空）。
@@ -1627,16 +1716,27 @@ def _place_array(tmpls, n_strings, pitch, gap, s_gap, dir="right"):
     offs = [offsets(t) for t in tmpls]
     spans = [(o[-1] + (t[-1]["bb"][1] - t[-1]["bb"][0])) if t else 0.0
              for o, t in zip(offs, tmpls)]
-    hmax = max((it["bb"][3] - it["bb"][2] for t in tmpls for it in t),
-               default=0.0)
+    # 每串自己占的高度（串间净空按**相邻两串的实际高度**留，串高不等时也准）
+    hgts = [max((it["bb"][3] - it["bb"][2] for it in t), default=0.0)
+            for t in tmpls]
+    # 第 s 串**前面**那一段间隔：段内 = 串间净空，段与段之间 = 跨支架距离
+    ggap = s_gap if group_gap is None else group_gap
+    gaps_before = []
+    if groups and len(groups) > 1:
+        for gi, gc in enumerate(groups):
+            for k in range(max(1, int(gc))):
+                gaps_before.append(ggap if (k == 0 and gi > 0) else s_gap)
+    while len(gaps_before) < n_strings:
+        gaps_before.append(s_gap)
     cells = []
-    xcur = 0.0
+    ox, oy, prev_span, prev_h = 0.0, 0.0, 0.0, 0.0
     for s in range(n_strings):
         t, o = tmpls[s], offs[s]
-        if dir == "down":
-            ox, oy = 0.0, -s * (hmax + s_gap)
-        else:
-            ox, oy = xcur, 0.0
+        if s:
+            if dir == "down":
+                oy -= prev_h + gaps_before[s]
+            else:
+                ox += prev_span + gaps_before[s]
         mi = 0
         for i, it in enumerate(t):
             is_stub = (it.get("kind") == "stub")
@@ -1651,8 +1751,7 @@ def _place_array(tmpls, n_strings, pitch, gap, s_gap, dir="right"):
                           "right_pt": it.get("right_pt")})
             if not is_stub:
                 mi += 1
-        if dir != "down":
-            xcur += spans[s] + s_gap
+        prev_span, prev_h = spans[s], hgts[s]
     x0 = min(c["P"][0] + c["bb"][0] for c in cells)
     x1 = max(c["P"][0] + c["bb"][1] for c in cells)
     y0 = min(c["P"][1] + c["bb"][2] for c in cells)
@@ -1660,11 +1759,217 @@ def _place_array(tmpls, n_strings, pitch, gap, s_gap, dir="right"):
     return cells, (x0, x1, y0, y1)
 
 
-def build_array_frame(frame, spec, log=None, progress=None):
+_BLOCK_GEO = {}
+
+
+def _block_geo(name):
+    """块库里的一个块 -> (展平图元, 包围盒)；带缓存（按块文件改动时间失效）。
+
+    板子布局预览靠它拿“这块板到底多大”，方框才是按真实外框画的。
+    """
+    p = os.path.join(ui.BLOCKS_DIR, str(name or "") + ".dxf")
+    try:
+        mt = os.path.getmtime(p)
+    except OSError:
+        return None
+    key = (str(name), mt)
+    if key in _BLOCK_GEO:
+        return _BLOCK_GEO[key]
+    out = None
+    try:
+        sec, _o = parse_sections_text(read_dxf_text(p))
+        bmap = _blocks_map(sec)
+        prims = []
+        _prim_list(group_entities(sec.get("ENTITIES", [])), bmap,
+                   (1, 0, 0, 1, 0, 0), 0, prims)
+        bb = _prims_bbox(prims)
+        if bb:
+            out = (prims, bb)
+    except Exception:
+        out = None
+    _BLOCK_GEO[key] = out
+    if len(_BLOCK_GEO) > 60:              # 改了块库会不断出新 key，别让它无限长
+        for k in list(_BLOCK_GEO)[:-30]:
+            _BLOCK_GEO.pop(k, None)
+    return out
+
+
+def array_preview_svg(spec, width=1000, pad=16):
+    """板子（阵列）的**实时布局预览**，返回 (svg, 说明文字)。
+
+    只算布局：不读外框图、不打包块、不出 DXF、也不画线束（线束是界面第二步的事）。
+    每块板按它自己块文件的**真实外框大小**画成方框（BHA 桩、电机也是方框），
+    所以“串数 / 每串板数 / 板间净空 / 串间净空 / 跨支架距离 / 桩插在哪里”一眼可辨。
+    """
+    def _n(key, dflt):
+        v = spec.get(key)
+        try:
+            return dflt if v is None or v == "" else float(v)
+        except (TypeError, ValueError):
+            return dflt
+
+    module  = (spec.get("module") or "").strip()
+    m_first = (spec.get("module_first") or "").strip()
+    m_mid   = (spec.get("module_mid") or "").strip()
+    m_last  = (spec.get("module_last") or "").strip()
+    n_per   = max(0, int(_n("n_per", 0)))
+    groups  = parse_string_groups(spec.get("n_strings"), 1)
+    n_str   = sum(groups)
+    gap_x   = _n("gap_x", 1.0)
+    gap_y   = _n("gap_y", gap_x) if spec.get("gap_y") not in (None, "") else gap_x
+    brk     = _n("bracket_gap", 4.0)
+    scheme  = (spec.get("scheme") or "Harness").strip() or "Harness"
+    dirn    = spec.get("dir") or ("down" if "LYNX" in scheme.upper() else "right")
+    head_blk = (spec.get("head_block") or "").strip()
+    head_gap = _n("head_gap", 60.0)
+
+    seq_mode = bool(m_first and m_mid and m_last)
+    if n_per < 1 or n_str < 1 or not (seq_mode or module):
+        return "", "组件（首块/中间块/尾块）没选全，或串数/每串板数是 0"
+    if seq_mode:
+        seq = [m_first] + [m_mid] * max(0, n_per - 2) + [m_last]
+        if n_per == 1:
+            seq = [m_last]
+    else:
+        seq = [module] * n_per
+
+    missing = [nm for nm in dict.fromkeys(seq) if not _block_geo(nm)]
+    if missing:
+        return "", "块库里没有这些块：%s" % "、".join(missing)
+    kinds = {nm: {"name": nm, "bb": _block_geo(nm)[1]}
+             for nm in dict.fromkeys(seq)}
+    tmpl = [kinds[nm] for nm in seq]
+    mw = max(t["bb"][1] - t["bb"][0] for t in tmpl)
+    mh = max(t["bb"][3] - t["bb"][2] for t in tmpl)
+
+    # BHA 桩：串号留空 = 每段一个（和真正生成时同一条规则）；块库里没有的条目忽略
+    bha, _shrunk = bha_group_expand(parse_bha(spec.get("bha"), n_str), groups)
+    bha = [e for e in bha
+           if (not e["stub"] or _block_geo(e["stub"]))
+           and (not e["motor"] or _block_geo(e["motor"]))]
+    tmpls, n_stub, stub_pos = [], 0, []
+    for s in range(n_str):
+        items = list(tmpl)
+        mine = [e for e in bha if e["strings"] is None or s in e["strings"]]
+        mine.sort(key=lambda e: e["after"], reverse=True)
+        for e in mine:
+            g = _block_geo(e["stub"] or e["motor"])
+            if not g:
+                continue
+            k = max(0, min(len(tmpl), int(e["after"])))
+            items.insert(k, {"name": e["stub"] or e["motor"], "bb": g[1],
+                             "kind": "stub",
+                             "gap_l": (gap_x if e["gap_l"] is None else e["gap_l"]),
+                             "gap_r": (gap_x if e["gap_r"] is None else e["gap_r"]),
+                             "motor": (e["motor"] if e["stub"] else ""),
+                             "rot": e["rot"]})
+            n_stub += 1
+            stub_pos.append((e["strings"], k))
+        tmpls.append(items)
+
+    cells, abox = _place_array(tmpls, n_str, mw + gap_x, gap_x, gap_y, dirn,
+                               groups=groups, group_gap=brk)
+
+    prims = []
+    # 起始块（CBX…）：摆在阵列左边 head_gap 处，和生成时同一个口径
+    if head_blk:
+        g = _block_geo(head_blk)
+        if g:
+            b = g[1]
+            x1 = abox[0] - head_gap                 # 它的右边缘
+            prims += shift_prims(g[0], x1 - b[1],
+                                 (abox[2] + abox[3]) / 2.0 - (b[2] + b[3]) / 2.0)
+            abox = (min(abox[0], x1 - (b[1] - b[0])), abox[1], abox[2], abox[3])
+
+    # 每块板画成一个方框，颜色标身份：红=这一串的首块、绿=尾块、灰=中间块、
+    # 蓝=BHA 桩、紫=电机。整张缩到卡片宽 —— 看的是“块数/位置/宽窄”，不看细节。
+    num_h, str_h = 9.0, 12.0
+    for c in cells:
+        p, b = c["P"], c["bb"]
+        if c.get("kind") == "stub":
+            col = 5
+        elif c["mi"] == 0:
+            col = 1
+        elif c["mi"] == n_per - 1:
+            col = 3
+        else:
+            col = 7
+        prims += rect_prims(p[0] + b[0], p[1] + b[2], p[0] + b[1], p[1] + b[3],
+                            "0", col)
+        if c.get("motor"):
+            mg = _block_geo(c["motor"])
+            if mg:
+                mb = mg[1]
+                prims += rect_prims(p[0] + mb[0], p[1] + mb[2],
+                                    p[0] + mb[1], p[1] + mb[3], "0", 6)
+    # 按**段**标注：每段上面画一条括号线 + “N 串” —— 2+3 就是前一段标“2 串”、
+    # 后一段标“3 串”。不再一串一串地写（一行一串的标签在图上又密又乱）。
+    sc0 = (width - 2 * pad) / max(abox[1] - abox[0], 1e-6)
+    mark_nums = (mw * sc0) >= 16.0
+    _starts = bha_group_starts(groups)
+    for gi, gc in enumerate(groups or [n_str]):
+        s0 = _starts[gi]
+        cs = [c for c in cells if s0 <= c["s"] < s0 + max(1, int(gc))]
+        if not cs:
+            continue
+        x0 = min(c["P"][0] + c["bb"][0] for c in cs)
+        x1 = max(c["P"][0] + c["bb"][1] for c in cs)
+        ytop = max(c["P"][1] + c["bb"][3] for c in cs)
+        by = ytop + str_h * 0.9
+        prims.append(("poly", [(x0, by), (x1, by)], False, "0", 4))
+        prims.append(("poly", [(x0, by), (x0, by + str_h * 0.55)], False, "0", 4))
+        prims.append(("poly", [(x1, by), (x1, by + str_h * 0.55)], False, "0", 4))
+        prims.append(("text", (x0 + x1) / 2.0, by + str_h * 1.7,
+                      "%d 串" % max(1, int(gc)), str_h, "0", 4))
+    # 板上序号：一块板在图上放得下就每块都标；放不下就**每 5 块标一个**
+    # （5/10/15…再加上最后一块）。这样几十块板一条串时也能一眼核对
+    # “电机插在第几块之后、头一块和尾块在哪”。
+    step = 1 if mark_nums else 5
+    for s in range(n_str):
+        mi = 0
+        for c in [c for c in cells if c["s"] == s]:
+            if c.get("kind") == "stub":
+                continue
+            mi += 1
+            if step > 1 and (mi % step) and mi != n_per:
+                continue
+            prims.append(("text", c["P"][0] + (c["bb"][0] + c["bb"][1]) / 2.0,
+                          c["P"][1] + (c["bb"][2] + c["bb"][3]) / 2.0 + num_h * 0.35,
+                          str(mi), num_h, "0", 5))
+    # 桩插在哪：直接把“第几块之后”写出来 —— 图上桩是方块，几十块板时肉眼分不出
+    # 是排在第 3 块还是第 30 块，写在文字里就不会看错。
+    _pk = []
+    for seq, aft in stub_pos:
+        # 口径：从这一串的**头一块**数起（头块算第 1 块，尾块也算在内）
+        t = ("第 1 块之前" if aft <= 0 else
+             ("第 %d 块之后" % aft if aft < n_per else "最后一块之后（含尾块）"))
+        if seq is not None:
+            t += "（串%s）" % ",".join(str(x + 1) for x in sorted(seq))
+        if t not in _pk:
+            _pk.append(t)
+    info = ("%d 串 × %d 块%s ｜ 净空 %.1f、跨支架 %.1f ｜ %s%s"
+            % (n_str, n_per,
+               ("（%s）" % "+".join(str(x) for x in groups)) if len(groups) > 1 else "",
+               gap_x, brk,
+               "串从下往上排" if dirn == "down" else "串从左往右排",
+               ("；BHA/电机 %d 处：%s" % (n_stub, "、".join(_pk))) if n_stub else ""))
+    # 整张缩到卡片宽：这是“示意”不是实际比例 —— 一屏就能看全，
+    # 板特别多时自动不标序号（标了也糊），位置/宽窄/块数照样看得清。
+    # 预览固定 140px 高：不管串数/排法怎么变，整块高度不变，界面一屏放得下
+    return _svg_from_prims(prims, width, pad, min_h=110, min_font=12.0,
+                           css_h=112), info
+
+
+def build_array_frame(frame, spec, log=None, progress=None, stats=None):
     """阵列（组件）+ 线束 生成，写进外框字节。返回 (dxf_text, log, wires)。
 
     画面（手册 13.1）：上=组件阵列，中=跨接线，下=线束。
     整体只等比缩一次：k 同时作用于块、间距和接点坐标（12.8 踩过的坑）。
+
+    stats：可选 dict，生成完往里回填 {"blocks": [这张图用到的块名, ...]}。
+           给“画到 CAD 只回放我们画的块”用 —— 以前那边是靠界面参数**猜**的，
+           自动补出来的块（CBX / 公头 / 母头 / 负极支线）没猜进去，
+           画到 CAD 时就整个丢了。现在直接回真实的清单。
     """
     log = list(log) if log else []
     wires = []
@@ -1689,10 +1994,19 @@ def build_array_frame(frame, spec, log=None, progress=None):
     m_mid    = (spec.get("module_mid") or "").strip()     # 每串中间块（重复）
     m_last   = (spec.get("module_last") or "").strip()    # 每串最后一块（带负极出线）
     n_per    = int(_n("n_per", 0))
-    n_str    = int(_n("n_strings", 0))
-    gap_x    = _n("gap_x", 2.0)          # 板与板之间的净空（贴板就填 2 甚至 0）
-    gap_y    = _n("gap_y", 2.0)          # 串与串之间的净空（可能放电机，默认先贴紧）
-    dirn     = spec.get("dir") or "right"   # right=串从左往右接；down=串从上往下叠
+    # 串数支持分段：4 / 2+3 / 3+2+2（段内=串间净空，段间=跨支架距离）
+    s_groups = parse_string_groups(spec.get("n_strings"), 1)
+    n_str    = sum(s_groups)
+    gap_x    = _n("gap_x", 1.0)          # 板与板之间的净空（默认 1）
+    # 串与串之间的净空：**默认跟板间净空一致**（用户口径）。只有显式填了 gap_y
+    # （老批量行 / 命令行）才用单独的值。
+    _gy_indep = spec.get("gap_y") not in (None, "")
+    gap_y    = _n("gap_y", gap_x) if _gy_indep else gap_x
+    brk_gap  = _n("bracket_gap", 4.0)    # 跨支架距离（串分段时，段与段之间）
+    # 方案（Harness / ALEX / IBEX…）：现在只是记下来（各方案的差异逻辑后面逐个补），
+    # 唯一已经生效的是串的排法：带 LYNX 的方案从下往上排，其余从左往右。
+    scheme   = (spec.get("scheme") or "Harness").strip() or "Harness"
+    dirn     = spec.get("dir") or ("down" if "LYNX" in scheme.upper() else "right")
     link     = bool(spec.get("link_array"))  # 是否画“阵列 ↔ 线束”的跨接线（默认不画）
     match_h  = spec.get("match_span")
     match_h  = True if match_h is None else bool(match_h)   # 线束各块接点对齐缩放
@@ -1716,9 +2030,10 @@ def build_array_frame(frame, spec, log=None, progress=None):
     neg_auto = True if neg_auto is None else bool(neg_auto)  # 负极那一行按正极自动生成
     neg_gap  = _n("neg_gap", 30.0)                           # 负极行到正极行的距离
     neg_head = (spec.get("neg_head") or "").strip()          # 负极行最左边那块（公头）
-    # 负极支线块的朝向：0 = 正放（插头朝上、接点朝下落在负极行线上，和正极行一样）；
-    # 180 = 翻过来挂（块会是倒的）。公头/母头不看这个值，自动朝链内。
-    neg_rot  = _n("neg_rotate", 0.0)
+    # 负极支线块的朝向：**不需要填角度**。逻辑就是“负极支线块的接线头去对应板子的
+    # 负极（接线头朝上、落在负极行线上）”，也就是固定正放（0°）；公头/母头另外
+    # 自动朝链内，不看这个值。界面上的“负极支线旋转”那一栏因此已去掉。
+    neg_rot  = 0.0
     pos_plug = (spec.get("pos_plug") or "").strip()         # 最右边那根支线的正极上插什么块（公头）
     neg_plug = (spec.get("neg_plug") or "").strip()         # 最右边那串的负极上插什么块（母头）
     keep_from   = (spec.get("keep_from") or "").strip()     # 手工内容（HAND_ 层）从哪搬
@@ -1781,9 +2096,14 @@ def build_array_frame(frame, spec, log=None, progress=None):
     # 能接串的“支线” = 正极支线 + 末端公头（公头也顶一根）；负极同理用母头
     pos_names = [x for x in (pos_feed, pos_plug) if x]
     neg_names = [x for x in (neg_feed, neg_plug) if x]
+    # 公头 / 母头（末端接头块）：线号规则里“最后一根支线→接头”这一段算**支线**
+    plug_names = [x for x in (pos_plug, neg_plug) if x]
     awg_main = (spec.get("awg_main") or "").strip()
     awg_br   = (spec.get("awg_branch") or "").strip()
     allow_up = bool(spec.get("allow_enlarge"))
+    # 连接点（CONN_POS/CONN_NEG 的 POINT）只是“用来定位”的辅助，用户要求**画出来的图
+    # 不要点**，所以默认不打；需要的时候界面勾一下（draw_points）再打。
+    draw_pts = bool(spec.get("draw_points"))
     clear_r  = _n("clearance_ratio", 0.5)
     label_r  = _n("label_ratio", 0.006)
     inset_x  = _n("inset_x", 0.04)
@@ -1791,9 +2111,11 @@ def build_array_frame(frame, spec, log=None, progress=None):
     k_floor  = _n("k_floor", 0.35)
 
     # 先把“实际收到的配置”回显出来，省得某一栏空着还到处找原因
-    log.append("配置: 组件 %s/%s/%s  每串%d块×%d串  板净空%.1f 串净空%.1f" %
-               (m_first or module, m_mid or module, m_last or module,
-                n_per, n_str, gap_x, gap_y))
+    log.append("配置: 方案 %s | 组件 %s/%s/%s  每串%d块×%s串  板净空%.1f 串净空%.1f%s" %
+               (scheme, m_first or module, m_mid or module, m_last or module,
+                n_per, ("+".join(str(x) for x in s_groups) if len(s_groups) > 1
+                        else str(n_str)), gap_x, gap_y,
+                (" 跨支架%.1f" % brk_gap) if len(s_groups) > 1 else ""))
     log.append("     线束链 %s | 正极支线块=%s 末端公头=%s 末端母头=%s | 负极自动=%s 负极支线块=%s" %
                ("→".join(harness) or "（空）", pos_feed or "（空）", pos_plug or "（空）",
                 neg_plug or "（空）", "开" if neg_auto else "关", neg_feed or "（空）"))
@@ -1807,6 +2129,12 @@ def build_array_frame(frame, spec, log=None, progress=None):
     # ---- 电机 / BHA 桩：插在某一串的两块板之间（手册 13.5 阶段③） ----
     # 界面给的是小表（结构化），批量的每一行 / 命令行给的是一行文字（见 parse_bha）。
     bha = parse_bha(spec.get("bha"), n_str)
+    # “串号留空 / 全部” = **每段一个电机**（3+3 → 前 3 串一个、后 3 串一个）
+    bha, _shrunk = bha_group_expand(bha, s_groups)
+    if _shrunk:
+        log.append("BHA/电机: 串号留空的条目按“每段一个”处理（共 %d 段）→ 落在 %s"
+                   % (len(s_groups), "、".join("串%d" % (k + 1)
+                                               for k in bha_group_starts(s_groups))))
     _bad_seq = [e for e in bha if e["strings"] is not None and not e["strings"]]
     if _bad_seq:
         log.append("⚠ BHA/电机: 这些条目的串号不在 1..%d 里，已跳过：%s"
@@ -2116,14 +2444,15 @@ def build_array_frame(frame, spec, log=None, progress=None):
                 pxx = (head_x0 if head_x0 is not None else abox[0]) - cw
             elif idx > first_feed:
                 # 支线**之后**的块（末端接头之类）：接着最后一块往右排 → 落在最右边
-                g = fix_gap if (is_fix(it["name"]) or is_fix(prev_name)) else gap
+                # 间距统一用**固定间距**：除正极支线/负极支线/公头/母头这四个“按
+                # 板子接点定位”的块以外，其余块（FUSE、CU-AL、接头……）之间
+                # 一律等距，不再跟着界面上那个大 GAP 走。
+                g = fix_gap
                 cx = (abox[0] + cw) if right is None else (right + g + cw)
                 pxx = cx - cw
             else:
-                # FUSE / CU-AL 这类块：和相邻块之间用固定间距（默认 30），不跟界面上的 GAP 走
-                g = gap
-                if is_fix(it["name"]) or is_fix(prev_name):
-                    g = fix_gap
+                # FUSE / CU-AL / 起始块这类“不钉板子接点”的块：一律固定间距
+                g = fix_gap
                 # 它们自己排一行，从**阵列左边缘**起头；不接着支线往后排
                 # （接着支线排的话，保险丝/接头会被推到线束中间去）
                 cx = ((head_x0 if head_x0 is not None else abox[0] + cw)
@@ -2197,7 +2526,8 @@ def build_array_frame(frame, spec, log=None, progress=None):
 
     def layout(gx, gy):
         """gx=板间净空, gy=串间净空（都用净空，pitch 由块宽算出来）。"""
-        cells, abox = _place_array(tmpls, n_str, mw + gx, gx, gy, dirn)
+        cells, abox = _place_array(tmpls, n_str, mw + gx, gx, gy, dirn,
+                                   groups=s_groups, group_gap=brk_gap)
         modmap = {(c["mi"], c["s"]): c for c in cells if c["mi"] is not None}
         hp = place_harness(modmap, abox)
         # 起始块（CBX）钉在阵列那一排，不参与“线束行”的定位
@@ -2253,6 +2583,8 @@ def build_array_frame(frame, spec, log=None, progress=None):
                 if gap_x > gx_min + 1e-9 or gap_y > gy_min + 1e-9:
                     log.append("k=%.3f 偏小，按 13.7 先把间距压到下限再算一次" % k)
                     gap_x, gap_y = min(gap_x, gx_min), min(gap_y, gy_min)
+                    if not _gy_indep:
+                        gap_y = gap_x          # 串间跟板间保持一致
                     L = layout(gap_x, gap_y)
                     cw = L["box"][1] - L["box"][0]
                     ch = L["box"][3] - L["box"][2]
@@ -2467,11 +2799,13 @@ def build_array_frame(frame, spec, log=None, progress=None):
             pa = (P[0] + c["pos_l"][0] * k, P[1] + c["pos_l"][1] * k)
             na = (P[0] + c["neg_l"][0] * k, P[1] + c["neg_l"][1] * k)
             anchors += [pa, na]
-            if c["mi"] == 0:           # 每串开头的正极 -> CONN_POS
+            if draw_pts and c["mi"] == 0:           # 每串开头的正极 -> CONN_POS
                 emit_point(pa[0], pa[1], "CONN_POS")
-            if c["mi"] == n_per - 1:   # 每串结束的负极 -> CONN_NEG
+            if draw_pts and c["mi"] == n_per - 1:   # 每串结束的负极 -> CONN_NEG
                 emit_point(na[0], na[1], "CONN_NEG")
-    log.append("已在每串首块正极打 CONN_POS、末块负极打 CONN_NEG（各 %d 个）" % n_str)
+    log.append(("已在每串首块正极打 CONN_POS、末块负极打 CONN_NEG（各 %d 个）" % n_str)
+               if draw_pts else
+               "连接点(POINT)：按你的要求不画（图里不出现点；需要时勾“画连接点”)")
     if n_stub_drawn:
         log.append("BHA 桩/电机: 画了 %d 个槽位" % n_stub_drawn)
 
@@ -2556,6 +2890,10 @@ def build_array_frame(frame, spec, log=None, progress=None):
         if head_blk and (hinsts[idx - 1]["name"] == head_blk or hinsts[idx]["name"] == head_blk):
             continue      # 起始块（CBX）是独立摆在阵列左边的，不和线束链连线
         _a, _b = hinsts[idx - 1]["name"], hinsts[idx]["name"]
+        # 线号按给的定义分两种（字面就是界面上填的“主线线号 / 支线线号”）：
+        #   主线 = 支线块↔支线块之间、以及第一个接头→第一根支线之间；
+        #   支线 = 最后一根支线块→公头/母头之间那一段（这一段两头必有接头块）。
+        _txt = awg_br if ((_a in plug_names) or (_b in plug_names)) else awg_main
         _pa = (neg_from is not None and idx - 1 >= neg_from)
         _pb = (neg_from is not None and idx >= neg_from)
         if _pa != _pb:
@@ -2570,14 +2908,14 @@ def build_array_frame(frame, spec, log=None, progress=None):
             b = hpt(idx, "lins", j)
             d = seg_c(a, b, _col)
             wires.append(("%s - %s" % (hinsts[idx - 1]["name"], hinsts[idx]["name"]),
-                          awg_main, d))
+                          _txt, d))
             if first is None:
                 first = (a, b)
         # 一对块只打一个标注（一对块之间常常有 2 根线，逐根打会叠在一起）
         if first:
             label_near(first[0], first[1],
                        (hfinal[idx - 1].get("labs") or []) + (hfinal[idx].get("labs") or []),
-                       awg_main)
+                       _txt)
 
     # ---- 跨接线（默认不画：正极支线不接板子） ----
     feeds = [h for h in hfinal if h["name"] in pos_names] if pos_names else []
@@ -2613,7 +2951,8 @@ def build_array_frame(frame, spec, log=None, progress=None):
         d = poly_len([A, p1, p2, top])
         # 标注落点：折线中段（和别的线号一样，统一取中点 + 固定偏移）
         lab = feeds[s].get("labs") or []
-        label_near(p1, p2, lab, awg_main)
+        # 跨接线 = 板子端子 -> 支线块，是支线那一根，所以标**支线线号**
+        label_near(p1, p2, lab, awg_br)
         wires.append(("串%d 正极跨接线 -> %s" % (s + 1, pos_feed), awg_main, d))
         if s >= len(nfeeds):
             continue
@@ -2623,7 +2962,7 @@ def build_array_frame(frame, spec, log=None, progress=None):
         q1, q2 = (B[0], y_route), (top2[0], y_route)
         emit_poly_c([B, q1, q2, top2], 7)         # 负极跨接线：白
         d2 = poly_len([B, q1, q2, top2])
-        label_near(q1, q2, [], awg_main, side=-1)   # 负极那根标在下方，不跟正极挤一起
+        label_near(q1, q2, [], awg_br, side=-1)     # 负极那根标在下方，不跟正极挤一起
         wires.append(("串%d 负极跨接线 -> %s" % (s + 1, neg_feed), awg_main, d2))
 
     # ---- 线号标注：统一落点（所有标注同一个高度、都压在连线中点） ----
@@ -2795,6 +3134,18 @@ def build_array_frame(frame, spec, log=None, progress=None):
                           "在外框内" if inside else "⚠ 超出外框了"))
     except Exception as ex:
         log.append("内容范围检查失败: %s" % ex)
+    if stats is not None:
+        # 这张图**真正画出去**的顶层块（阵列里的组件/桩/电机 + 线束整条链）。
+        # 画到 COM 端时按这份清单回放，就不必再去猜“哪些块是我们画的”。
+        _names = []
+        for _c in L["cells"]:
+            for _n in (_c.get("name"), _c.get("motor")):
+                if _n and _n not in _names:
+                    _names.append(_n)
+        for _it in hinsts:
+            if _it["name"] and _it["name"] not in _names:
+                _names.append(_it["name"])
+        stats["blocks"] = _names
     return out.decode("latin-1"), log, wires
 
 
@@ -3399,12 +3750,25 @@ def _prim_list(records, blocks, mtx, depth, out):
         i += 1
 
 
-def entities_to_svg(records, blocks=None, width=1000, pad=16):
-    """把原始 DXF 实体记录渲染成 SVG 预览（解析 INSERT 递归）。"""
-    if blocks is None:
-        blocks = _LAST_BLOCKS
-    prims = []
-    _prim_list(records, blocks, (1, 0, 0, 1, 0, 0), 0, prims)
+def _prim_color(p):
+    """取图元的 DXF 颜色号（预览里用来区分不同的块）。"""
+    try:
+        if p[0] == "text":
+            return int(p[6] or 0)
+        if p[0] == "circle":
+            return int(p[5] or 0)
+        return int(p[4] or 0)
+    except (IndexError, TypeError, ValueError):
+        return 0
+
+
+_PREV_STROKE = {1: "#c0392b", 2: "#b7791f", 3: "#2e7d32", 4: "#0e8a8a",
+                5: "#1466c8", 6: "#8e44ad", 7: "#333333"}
+
+
+def _svg_from_prims(prims, width=1000, pad=16, min_h=56, min_font=7.0, css_w=None,
+                    css_h=None):
+    """展平图元 -> SVG（块卡片、生成结果、板子布局预览都用这一套渲染）。"""
     xs = []; ys = []
     for p in prims:
         if p[0] == "poly":
@@ -3418,26 +3782,57 @@ def entities_to_svg(records, blocks=None, width=1000, pad=16):
         return "<svg></svg>"
     minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
     sc = (width - 2 * pad) / max(maxx - minx, 1e-6)
-    H = int((maxy - miny) * sc) + 2 * pad
+    # 很扁的块（横着的接头、母线之类）按比例画出来只有几个像素高，卡片上看就是
+    # 一条糊线 —— 给它一个最小高度，内容垂直居中，卡片里才看得清。
+    Hraw = int((maxy - miny) * sc) + 2 * pad
+    H = max(Hraw, min_h)
+    yoff = (H - Hraw) / 2.0
     def X(x): return pad + (x - minx) * sc
-    def Y(y): return H - pad - (y - miny) * sc
+    def Y(y): return yoff + Hraw - pad - (y - miny) * sc
     parts = []
     for p in prims:
         if p[0] == "poly":
             pts = " ".join("%.1f,%.1f" % (X(x), Y(y)) for x, y in p[1])
             if pts:
-                parts.append('<polyline points="%s" fill="none" stroke="#1c1c1c" stroke-width="1"/>' % pts)
+                # vector-effect=non-scaling-stroke：卡片把 SV-G 缩小时线宽不跟着
+                # 缩到 0.1 像素（以前看着又淡又糊，就是缩没了）
+                parts.append('<polyline points="%s" fill="none" stroke="%s" '
+                             'stroke-width="1.4" vector-effect="non-scaling-stroke" '
+                             'stroke-linejoin="round" stroke-linecap="round"/>'
+                             % (pts, _PREV_STROKE.get(_prim_color(p), "#1c1c1c")))
         elif p[0] == "circle":
-            parts.append('<circle cx="%.1f" cy="%.1f" r="%.1f" fill="none" stroke="#1c1c1c" stroke-width="1"/>'
-                         % (X(p[1]), Y(p[2]), p[3] * sc))
+            parts.append('<circle cx="%.1f" cy="%.1f" r="%.1f" fill="none" stroke="%s" '
+                         'stroke-width="1.4" vector-effect="non-scaling-stroke"/>'
+                         % (X(p[1]), Y(p[2]), max(p[3] * sc, 1.0),
+                            _PREV_STROKE.get(_prim_color(p), "#1c1c1c")))
         elif p[0] == "text":
             sv = str(p[3]).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
             if sv:
-                parts.append('<text x="%.1f" y="%.1f" font-size="%.1f" fill="#1466c8" text-anchor="middle">%s</text>'
-                             % (X(p[1]), Y(p[2]), max(6.0, p[4] * sc), sv))
-    return ('<svg viewBox="0 0 %d %d" style="width:100%%;background:#fff;'
-            'border:1px solid #e6e8ee;border-radius:10px">' % (width, H)
-            + "".join(parts) + "</svg>")
+                parts.append('<text x="%.1f" y="%.1f" font-size="%.1f" fill="#1466c8" '
+                             'text-anchor="middle" vector-effect="non-scaling-stroke">%s</text>'
+                             % (X(p[1]), Y(p[2]), max(min_font, p[4] * sc), sv))
+    # 卡片容器给多大就画多大（preserveAspectRatio=meet 保证不变形、不裁切），
+    # 线宽用 non-scaling-stroke 保持清晰 —— 预览才和画出来的图对得上。
+    if css_h:
+        # 固定显示高度、宽度按比例算：整块预览的高度就固定了，
+        # 界面不会因为串数/排法不同而忽高忽低（一屏放得下）。
+        style = "height:%dpx;width:auto;display:block;margin:0 auto;background:#fff" % int(css_h)
+    elif css_w:
+        # 画布比容器宽时给个**像素宽**，让外层横向滚动（预览要看序号就得不缩那么狠）
+        style = "width:%dpx;height:auto;display:block;background:#fff" % int(css_w)
+    else:
+        style = "width:100%%;height:100%%;display:block;background:#fff"
+    return ('<svg viewBox="0 0 %d %d" preserveAspectRatio="xMidYMid meet" style="%s">'
+            % (width, H, style) + "".join(parts) + "</svg>")
+
+
+def entities_to_svg(records, blocks=None, width=1000, pad=16):
+    """把原始 DXF 实体记录渲染成 SVG 预览（解析 INSERT 递归）。"""
+    if blocks is None:
+        blocks = _LAST_BLOCKS
+    prims = []
+    _prim_list(records, blocks, (1, 0, 0, 1, 0, 0), 0, prims)
+    return _svg_from_prims(prims, width, pad)
 
 
 if __name__ == "__main__":

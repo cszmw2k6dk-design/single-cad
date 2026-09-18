@@ -111,6 +111,45 @@ def has_block(doc, name):
         return False
 
 
+def header_nums(sec, names):
+    """从 DXF 表头里取几个系统变量（如 $PDMODE / $PDSIZE）的数值。"""
+    want = {n.upper() for n in names}
+    out, cur = {}, None
+    for c, v in (sec.get("HEADER", []) or []):
+        if c == "9":
+            cur = str(v).strip().upper()
+            continue
+        if cur in want:
+            try:
+                out[cur] = float(v)
+            except (TypeError, ValueError):
+                pass
+            cur = None
+    return out
+
+
+def match_point_style(doc, sec, log=None):
+    """把 DXF 表头里的“点怎么显示”抄到 CAD 里。
+
+    DXF 里 $PDMODE/$PDSIZE 决定 POINT 画出来是什么样子；用 COM 画到 CAD 时，
+    点显示的是**目标图自己的设置**，两个值不一样时，同一个连接点在 DXF 里是
+    一个小点、在 CAD 里却变成十字光标。这里按 DXF 的值对齐，两边看着就一致。
+    """
+    hv = header_nums(sec, ("$PDMODE", "$PDSIZE", "$PDSTYLE"))
+    got = []
+    for var, key in (("PDMODE", "$PDMODE"), ("PDSIZE", "$PDSIZE"),
+                     ("PDSTYLE", "$PDSTYLE")):
+        if key not in hv:
+            continue
+        try:
+            doc.SetVariable(var, hv[key])
+            got.append("%s=%g" % (var, hv[key]))
+        except Exception:
+            pass
+    if got and log is not None:
+        log.append("连接点(POINT)显示按 DXF 对齐：" + "、".join(got))
+
+
 def draw_prims(space, prims):
     """把展平后的图元画进某个 Block / ModelSpace。返回画了几个。
 
@@ -170,8 +209,15 @@ def prim_style(p):
     return (p[3] if len(p) > 3 else ""), (p[4] if len(p) > 4 else 0)
 
 
-def ensure_block(doc, name, bmap, log):
-    """目标图里没有这个块，就用展平图元现造一个。返回 (是否可用, 画了几个图元)。"""
+def ensure_block(doc, name, bmap, log, refresh=True):
+    """目标图里没有这个块，就用展平图元现造一个。返回 (是否可用, 画了几个图元)。
+
+    refresh=True（画到 CAD 的默认）：图里已经有同名块时**删掉重建**。
+    为什么必须重建：画到 CAD 是“按这次生成的 DXF 重画一遍”，图里那个同名块往往是
+    上一次生成留下的、内容已经和这次不一样了。以前这里是“已存在就跳过”，于是
+    批量连画几张时，第二张以后的图直接沿用了第一次的块内容 —— 这就是
+    “单独画一张正常、连着画几张就不对”的根子。
+    """
     if not name:
         return False, 0
     recs = bmap.get(name)
@@ -181,21 +227,30 @@ def ensure_block(doc, name, bmap, log):
     prims = []
     wr._prim_list(recs, bmap, (1, 0, 0, 1, 0, 0), 0, prims)
     if has_block(doc, name):
-        # 块已存在。但如果它是**空的**（上一次画到一半失败留下的），后面每次都会
-        # “因为已存在而跳过”，那个块就永远是空的、INSERT 什么都不显示。
-        # 所以空块要补画内容。
-        try:
-            blk = doc.Blocks.Item(name)
-            if blk.Count == 0 and prims:
-                for lay in sorted({prim_style(p)[0] for p in prims if prim_style(p)[0]}):
-                    ensure_layer(doc, lay)
-                n = draw_prims(blk, prims)
-                n += add_dims(blk, doc, dims_in_records(recs), log)
-                log.append("块 %s 已存在但是空的，补画了 %d 个图元" % (name, n))
-                return True, n
-        except Exception as ex:
-            log.append("⚠ 检查已有块 %s 失败: %s" % (name, ex))
-        return True, 0
+        if refresh and not str(name).startswith("*"):
+            try:
+                doc.Blocks.Item(name).Delete()
+                log.append("块 %s 已存在：已删掉重建（保证和这次的 DXF 一模一样）" % name)
+            except Exception as ex:
+                log.append("⚠ 重建块 %s 失败(%s)：沿用图里已有的那份，位置对但内容可能是旧的"
+                           % (name, ex))
+                return True, 0
+        else:
+            # 不重建时：块已存在就直接用。但如果它是**空的**（上一次画到一半失败
+            # 留下的），后面每次都会“因为已存在而跳过”，那个块就永远是空的、
+            # INSERT 什么都不显示 —— 所以空块还是要把内容补上。
+            try:
+                blk = doc.Blocks.Item(name)
+                if blk.Count == 0 and prims:
+                    for lay in sorted({prim_style(p)[0] for p in prims if prim_style(p)[0]}):
+                        ensure_layer(doc, lay)
+                    n = draw_prims(blk, prims)
+                    n += add_dims(blk, doc, dims_in_records(recs), log)
+                    log.append("块 %s 已存在但是空的，补画了 %d 个图元" % (name, n))
+                    return True, n
+            except Exception as ex:
+                log.append("⚠ 检查已有块 %s 失败: %s" % (name, ex))
+            return True, 0
     try:
         blk = doc.Blocks.Add(pt(0, 0), name)
     except Exception as ex:
@@ -285,11 +340,12 @@ def add_dims(space, doc, dims, log):
 
 
 def replay(doc, dxf_path, log, only_blocks=None, only_layers=OUR_LAYERS,
-           progress=None, sheet_names=None):
+           progress=None, sheet_names=None, refresh_blocks=True):
     """把 dxf_path 里“我们生成的那部分”画进 doc。返回统计。
 
     only_blocks：只回放块名在这里面的 INSERT（外框图自己的块不重画）。
     only_layers：只回放这些层上的线/文字/点。
+    refresh_blocks：同名块已存在时删掉重建（DXF 才是准的，见 ensure_block）。
     """
     def pg(pct, stage):
         if progress:
@@ -334,16 +390,19 @@ def replay(doc, dxf_path, log, only_blocks=None, only_layers=OUR_LAYERS,
                 nm = wr._g1(e, "2") or ""
                 _t0 = time.time() if nm in _sheets else 0.0
                 if nm not in made:
-                    ok, np = ensure_block(doc, nm, bmap, log)
+                    ok, np = ensure_block(doc, nm, bmap, log, refresh=refresh_blocks)
                     stat["blk_prim"] += np
                     made.add(nm)
                     if not ok:
                         stat["skip"] += 1
                         continue
+                # 关键：DXF 里的 50 组码是**角度**，而 COM 的 InsertBlock 要**弧度**。
+                # 以前把角度直接当弧度传进去（180 变成 180 弧度 = 10313°），
+                # 于是“负极那一行/公头母头”这些带旋转的块在 CAD 里全是乱转的。
                 o = insert_block(ms, wr._gf(e, "10"), wr._gf(e, "20"), nm,
                                  wr._gf(e, "41", 1.0) or 1.0,
                                  wr._gf(e, "42", 1.0) or 1.0,
-                                 wr._gf(e, "50", 0.0))
+                                 math.radians(wr._gf(e, "50", 0.0)))
                 o.Layer = lay
                 stat["INSERT"] += 1
                 if _t0:                       # 这一张画完了：报一下用时
@@ -412,6 +471,9 @@ def replay(doc, dxf_path, log, only_blocks=None, only_layers=OUR_LAYERS,
                "正在画实体 %d/%d…" % (_n_done, len(recs)))
 
     # ---- 线号标注：按 DXF 里的点建 CAD 原生标注（坐标一模一样，不再重算）----
+    # 只有当这张图里**真的有点**时才去动 PDMODE/PDSIZE（图里没点就别改用户的设置）
+    if any(e and e[0][1] == "POINT" for e in recs):
+        match_point_style(doc, sec, log)
     if our_dims:
         pg(97, "正在加线号标注（%d 个）…" % len(our_dims))
         stat["DIM"] += add_dims(ms, doc, our_dims, log)

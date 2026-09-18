@@ -29,7 +29,7 @@ import runtime_paths as rp
 
 # ---- 更新源：改这里就能指向别的仓库 -----------------------------------------
 GH_OWNER = "cszmw2k6dk-design"
-GH_REPO = "single-cad"
+GH_REPO = "single-line-cad"
 GH_BRANCH = "main"
 
 RAW_BASE = "https://raw.githubusercontent.com/%s/%s/%s" % (GH_OWNER, GH_REPO, GH_BRANCH)

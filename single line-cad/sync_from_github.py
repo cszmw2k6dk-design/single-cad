@@ -28,7 +28,7 @@ import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-OWNER, REPO, BRANCH = "cszmw2k6dk-design", "single-cad", "main"
+OWNER, REPO, BRANCH = "cszmw2k6dk-design", "single-line-cad", "main"
 API = "https://api.github.com/repos/%s/%s" % (OWNER, REPO)
 PREFIX = "single line-cad/"          # 仓库里代码所在的子目录
 
@@ -36,7 +36,7 @@ PREFIX = "single line-cad/"          # 仓库里代码所在的子目录
 def _get(url, timeout=120, api=True):
     # 注意：Accept 头只给 JSON 接口用。下载 zip 时如果还带 vnd.github+json，
     # GitHub 会回一个 JSON 报错而不是源码包（解出来就是一堆错文件）。
-    h = {"User-Agent": "single-cad-sync", "Cache-Control": "no-cache"}
+    h = {"User-Agent": "single-line-cad-sync", "Cache-Control": "no-cache"}
     if api:
         h["Accept"] = "application/vnd.github+json"
     req = urllib.request.Request(url, headers=h)
@@ -52,7 +52,7 @@ def download_zip(sha):
     """下某个提交的源码包，返回 (临时zip路径, 解包目录名前缀)。"""
     with _get(API + "/zipball/" + sha, api=False) as r:
         data = r.read()
-    tmp = os.path.join(tempfile.gettempdir(), "single-cad-sync.zip")
+    tmp = os.path.join(tempfile.gettempdir(), "single-line-cad-sync.zip")
     with open(tmp, "wb") as f:
         f.write(data)
     return tmp

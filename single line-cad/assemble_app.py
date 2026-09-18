@@ -2,11 +2,11 @@
 """assemble_app.py -- 把 PyInstaller 的产物整理成一个可以直接拷走的文件夹。
 
 用法：python assemble_app.py [--dest 目标目录]
-默认目标：项目上一级的「Single-CAD」文件夹。
+默认目标：项目上一级的「Single line-CAD」文件夹。
 
 摆出来的结构：
-    Single-CAD/
-        Single-CAD.exe     双击运行
+    Single line-CAD/
+        Single line-CAD.exe     双击运行
         blocklib/                  块库（可以随时改/加块）
         templates/                 外框模板（放新的 DXF 进来就能用）
         out/                       生成结果、线长表
@@ -22,13 +22,13 @@ import shutil
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-EXE_NAME = "Single-CAD.exe"
+EXE_NAME = "Single line-CAD.exe"
 
-README = """Single-CAD
+README = """Single line-CAD
 =====================
 
 【怎么用】
-1. 双击 Single-CAD.exe
+1. 双击 Single line-CAD.exe
 2. 会弹出一个**桌面窗口**（不是浏览器），界面就在窗口里
 3. 左边选块 → 右边排成线束链（可以不填）→ 填好串数/板数 → 点「生成」
 4. 两种模式：
@@ -82,10 +82,10 @@ exe 旁边会自动生成「启动日志.txt」，里面记着启动过程、块
 以及报错信息。双击没反应、或者窗口没出来时，先看这个文件。
 
 想改用浏览器打开：命令行运行
-    Single-CAD.exe --browser
+    Single line-CAD.exe --browser
 
 想指定端口（默认 8770，被占用会自动往后试）：
-    Single-CAD.exe --port 8790
+    Single line-CAD.exe --port 8790
 
 【常见问题】
 Q: 双击没反应 / 窗口没弹出来？
@@ -114,7 +114,7 @@ A: 需要重启本程序（关掉窗口再双击 exe）。块库是启动时读�
 程序启动时会自动去 GitHub 仓库查一次版本，界面右上角也有「检查更新」按钮。
 发现新版会问你要不要下载；下载完成后**关掉窗口重新打开**即生效
 （更新下来的代码放在 _update/ 里，不会动这个 exe）。
-更新源：https://github.com/cszmw2k6dk-design/single-cad
+更新源：https://github.com/cszmw2k6dk-design/single-line-cad
 
 【发版（把改动推给用户的程序）】
 双击项目根目录的 publish.cmd，或者命令行：
@@ -142,7 +142,7 @@ def copy_missing(src, dst, log):
 def main(argv=None):
     ap = argparse.ArgumentParser(description="整理打包产物")
     ap.add_argument("--dest", default=os.path.join(os.path.dirname(HERE),
-                                                   "Single-CAD"))
+                                                   "Single line-CAD"))
     ap.add_argument("--dist", default=os.path.join(HERE, "dist"))
     args = ap.parse_args(argv)
 
