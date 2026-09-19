@@ -124,15 +124,35 @@ EN = {
     # ================= 界面：电机 / BHA 桩位置 =================
     "电机 / BHA 桩位置": "Motor / BHA stub position",
     "加一处": "Add one",
-    "每串中点插一处": "One per string, at mid",
-    "每串都在中间那块之后插一处（位置 = 每串板数 ÷ 2，四舍五入）":
-        "Insert one per string after the middle module (position = modules per string ÷ 2, rounded)",
-    "在某一串的两块板之间插一个 BHA 桩块（可以再放一个电机块）；桩右边的板整体右移，阵列自动变长、线束支线跟着走。串号留空 = 所有串。":
-        "Insert a BHA stub block between two modules of a string (optionally with a motor block); "
-        "every module to its right shifts right, the array grows and the harness feeders follow. "
-        "Leave the string field empty for all strings.",
-    "串号": "Strings",
-    "插在第几块之后": "After module #",
+    "存为方案": "Save as scheme",
+    "删方案": "Delete scheme",
+    "先在“串数”那一格填好串型（例如 4 或 3+3），再存为方案":
+        "Fill the string layout in the \u201cStrings\u201d box first (e.g. 4 or 3+3), then save it as a scheme",
+    "给这个方案起个名字（例如 4串 / 3+3 两段）":
+        "Name this scheme (e.g. 4 strings / 3+3 sections)",
+    "删掉方案：": "Delete scheme: ",
+    "串数：从右下角“方案”里选串型，也可以自己填（4 或 2+3 分段）":
+        "Strings: pick a scheme from the bottom-right box, or type it yourself (4, or 2+3 with sections)",
+    "整排中间插一处": "One at the middle of the row",
+    "按整排总块数取中间：4 串 × 20 块 → 第 40 块之后":
+        "Takes the middle of the whole row: 4 strings × 20 modules → after module 40",
+    "每段中点插一处": "One per bracket section, at mid",
+    "每个支架（每段）中点各一处，串数写 3+3 时就是前后各一个":
+        "One at the middle of each bracket section; with 3+3 strings that is one in front and one behind",
+    "两块板之间插一个 BHA 桩块（可再挂电机）；位置 = 整排第几块之后（不分串）：4 串 × 20 块共 80 块，填 40 就是正中间；0 或留空 = 最前面；写“每段” = 每段中点各一处。留空整列 = 不插桩。":
+        "Insert a BHA stub block between two modules (optionally with a motor block); the position is "
+        "\u201cafter which module of the whole row\u201d (counting across strings): 4 strings × 20 modules = 80 "
+        "modules, so 40 is the exact middle; 0 or empty = very front; write \u201ceach section\u201d for the mid of "
+        "every bracket section. Empty table = no stubs.",
+    "整排第几块之后": "After module # (whole row)",
+    "串数": "Strings",
+    "这一行管几串的结构：留空 = 图里所有结构都插；填 4 = 只插 4 串那种结构":
+        "Which structure this row applies to: empty = every structure in the drawing; "
+        "4 = only the 4-string structures",
+    "整排第几块之后（不分串）：0/留空=最前面；4 串 × 20 块填 40 = 正中间；填得比总块数大就排到最后；写“每段”=每段中点各一处":
+        "After which module of the whole row (counting across strings): 0/empty = very front; "
+        "4 strings × 20 modules → 40 = the middle; larger than the total = at the very end; "
+        "write \u201ceach section\u201d for the mid of every bracket section",
     "BHA 桩块": "BHA stub block",
     "电机块": "Motor block",
     "电机旋转": "Motor rotation",
@@ -144,17 +164,15 @@ EN = {
     "跟随板间净空": "same as module gap",
     "同上": "same as above",
     "全部": "all",
-    "串号：留空=所有串；也可以写 1,3 或 2-4":
-        "Strings: empty = all; you can also write 1,3 or 2-4",
-    "插在第几块之后：0=第 1 块之前；填得比每串板数大就排到最后":
-        "After module #: 0 = before the first module; larger than modules-per-string = at the end",
     "电机块绕插入点转多少度（0 / 90 / 180 / 270）":
         "Rotation of the motor block around its insertion point (0 / 90 / 180 / 270)",
     "桩这一侧的净空；留空=跟随“板间净空”":
         "Clearance on this side of the stub; empty = follow the module gap",
-    "写法：串号:第几块之后:桩块:电机块:旋转:左净空:右净空，多处用 ; 隔开；例 全部:10:BHA:MOTOR:0 或 2:5:BHA:MOTOR:90;4:12:BHA。留空 = 沿用上面那张 BHA 表":
-        "Format: strings:after-module#:stub:motor:rotation:gap-left:gap-right, several entries separated by ;. "
-        "Examples: all:10:BHA:MOTOR:0 or 2:5:BHA:MOTOR:90;4:12:BHA. Empty = use the BHA table above",
+    "写法：整排第几块之后:桩块:电机块:旋转:左净空:右净空，多处用 ; 隔开；位置按整排连续数（不分串）：4 串 × 20 块填 40 = 正中间；写“每段”=每段中点各一处。例 40:BHA:MOTOR:0 或 20:BHA:MOTOR:90;60:BHA。留空 = 沿用上面那张 BHA 表":
+        "Format: after-module-of-the-row:stub:motor:rotation:gap-left:gap-right, several entries separated by ;. "
+        "The position counts across the whole row (not per string): 4 strings × 20 modules → 40 = the middle; "
+        "write \u201ceach section\u201d for the mid of every bracket section. "
+        "Examples: 40:BHA:MOTOR:0 or 20:BHA:MOTOR:90;60:BHA. Empty = use the BHA table above",
 
     # ================= 界面：批量模式 =================
     "份数": "Count",
@@ -327,10 +345,16 @@ EN = {
     "     起始块=%s 间距%.0f | 跨接线=%s": "     head block={} gap{} | jumpers={}",
     "阵列: %d 串 x %d 块，%s，板间净空 %.1f / 串间净空 %.1f，内容 %.1f x %.1f":
         "Array: {} strings × {} modules, {}, module gap {} / string gap {}, content {} × {}",
-    "BHA/电机: %d 处 | %s": "BHA / motor: {} position(s) | {}",
-    "串%d: %s 插在 %s 之后（桩宽 %.1f，左净空 %.1f 右净空 %.1f）→ 它右边的板整体右移 %.1f%s":
-        "String {}: {} inserted {} (stub width {}, gap left {} gap right {}) → modules to its right "
-        "shift right by {}{}",
+    "BHA/电机: %d 处（%s）": "BHA / motor: {} position(s) ({})",
+    "BHA/电机: 位置写“每段”的条目按“每段中点各一处”处理（共 %d 段）→ 落在 %s":
+        "BHA / motor: entries placed at \u201ceach section\u201d become one per bracket section "
+        "({} section(s)) → landing at {}",
+    "⚠ BHA/电机: 这些条目的位置算不出落在哪一串（共 %d 串），已跳过：%s":
+        "⚠ BHA / motor: these positions cannot be mapped to a string (out of {} strings) and were skipped: {}",
+    "整排第 %d 块处（串%d内第 %d 块之后）: %s （桩宽 %.1f，左净空 %.1f 右净空 %.1f）→ 它右边的板整体右移 %.1f%s":
+        "After module {} of the row (string {} after module {}): {} (stub width {}, gap left {} gap right {}) "
+        "→ modules to its right shift right by {}{}",
+    "；%s 挂在桩上，旋转 %.0f°": "; {} mounted on the stub, rotated {}°",
     "BHA 桩: 插了 %d 处（%s）；阵列宽度按插入后的实际排布重算":
         "BHA stubs: {} inserted ({}); the array width is recomputed from the actual layout",
     "BHA 桩/电机: 画了 %d 个槽位": "BHA stub / motor: {} slot(s) drawn",

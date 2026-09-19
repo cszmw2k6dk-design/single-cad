@@ -160,9 +160,10 @@ def main(argv=None):
                     help="串与串之间的净空（中间可能要放电机，放就调大）")
     ap.add_argument("--bha", default="",
                     help="电机 / BHA 桩插在板与板之间（可多处，用 ; 隔开）。"
-                         "一处写法：串号:第几块之后:桩块:电机块:电机旋转:左净空:右净空。"
-                         "例：--bha \"全部:10:BHA:MOTOR:0\"  或  --bha \"2:5:BHA:MOTOR:90;4:12:BHA\"；"
-                         "串号可以留空/写 全部，也可以写 1,3 或 2-4；"
+                         "一处写法：整排第几块之后:桩块:电机块:电机旋转:左净空:右净空。"
+                         "位置按整个阵列连续数（不分串）：4 串 × 20 块时 40 = 正中间；"
+                         "留空 = 最前面；写“每段” = 每段（每个支架）中点各一处。"
+                         "例：--bha \"40:BHA:MOTOR:0\"  或  --bha \"20:BHA:MOTOR:90;60:BHA\"；"
                          "桩右边的板整体右移（位移 = 桩宽 + 左右净空 - 板间净空），阵列自动变长")
     ap.add_argument("--dir", default="right", choices=["right", "down"],
                     help="串的排法：right=从左往右接（默认），down=从上往下叠")
@@ -256,7 +257,7 @@ def main(argv=None):
                 sec, _o = wr.parse_sections(outpath, "utf-8")
                 keep_names = set([a.module, a.module_first, a.module_mid, a.module_last]
                                  + harness
-                                 + wr.bha_block_names(a.bha, a.n_strings))   # BHA 桩/电机
+                                 + wr.bha_block_names(a.bha, a.n_strings, a.n_per))   # BHA 桩/电机
                 keep = [e for e in wr.group_entities(sec.get("ENTITIES", []))
                         if wr._g1(e, "2") in keep_names
                         or (wr._g1(e, "8") or "").upper() in ("WIRE", "WIRE_LABEL")]

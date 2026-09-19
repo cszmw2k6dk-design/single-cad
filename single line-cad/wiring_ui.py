@@ -45,6 +45,30 @@ except Exception:                     # 源码运行：维持原样
 DEFAULT_PORT = 8770
 
 
+def vendor_dir():
+    """vendor/（morphicons 那套图标变形库）在哪儿。
+
+    打包成 exe 时走 _MEIPASS（spec 里把 vendor 打进去了）；源码运行就是同目录。
+    """
+    outs = []
+    try:
+        outs.append(os.path.join(_rp.APP_ROOT, "vendor"))
+    except Exception:
+        pass
+    try:
+        import sys as _sys
+        mp = getattr(_sys, "_MEIPASS", "")
+    except Exception:
+        mp = ""
+    if mp:
+        outs.append(os.path.join(mp, "vendor"))
+    outs.append(os.path.join(HERE, "vendor"))
+    for p in outs:
+        if p and os.path.isdir(p):
+            return p
+    return outs[-1]
+
+
 def list_frames():
     if not os.path.isdir(FRAMES_DIR):
         return []
@@ -349,6 +373,22 @@ HTML = r"""<!doctype html>
  }
 </style></head>
 <body>
+<div id="szBox" style="position:fixed;right:14px;bottom:14px;z-index:99;background:var(--card);
+     border:1px solid var(--line);border-radius:10px;padding:8px 10px;display:flex;gap:6px;align-items:center">
+  <b style="font-size:13px">方案</b>
+  <select id="scheme" style="max-width:190px" onchange="onSchemeChange()"
+    title="方案的生成逻辑逐个补；现在只有“串的排法”按方案自动定：带 LYNX 的方案从下往上排，其余从左往右排">
+    <option value="Harness">Harness</option>
+    <option value="ALEX">ALEX</option>
+    <option value="IBEX+AI跳线">IBEX+AI跳线</option>
+    <option value="IBEX PLUS">IBEX PLUS</option>
+    <option value="IBEX+CU跳线">IBEX+CU跳线</option>
+    <option value="LYNX+CU跳线">LYNX+CU跳线</option>
+    <option value="LYNX+AI跳线">LYNX+AI跳线</option>
+    <option value="LYNX+Harness">LYNX+Harness</option>
+    <option value="LYNX+IBEX">LYNX+IBEX</option>
+  </select>
+</div>
 <header>
   <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
     <span class="logo">SL</span>
@@ -356,7 +396,10 @@ HTML = r"""<!doctype html>
     <div style="flex:1 1 320px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end">
       <span class="langbox">
         <button class="ghost" id="langBtn" onclick="toggleLang(event)"
-                title="语言 / Language" style="padding:5px 11px;font-size:15px;line-height:1">🌐</button>
+                title="语言 / Language"
+                style="padding:4px 9px;line-height:0;display:inline-flex;align-items:center;gap:6px">
+          <morph-icon id="langIcon" size="18" label="Language"></morph-icon>
+          <span id="langTag" style="font-size:12px;line-height:1">中</span></button>
         <div id="langMenu" style="display:none">
           <button id="langZh" onclick="setLang('zh')">中文</button>
           <button id="langEn" onclick="setLang('en')">English</button>
@@ -364,7 +407,9 @@ HTML = r"""<!doctype html>
       </span>
       <span id="verTxt">版本 {{VER}}（{{VERNOTE}}）</span>
       <button class="ghost" id="updBtn" onclick="checkUpdate()"
-              style="padding:5px 12px;font-size:13px">检查更新</button>
+              title="检查更新 / Check for updates"
+              style="padding:4px 10px;font-size:13px;display:inline-flex;align-items:center;gap:6px">
+        <morph-icon id="updIcon" size="16" label="Update"></morph-icon><span id="updTag">检查更新</span></button>
       <span id="updMsg"></span>
     </div>
   </div>
@@ -381,32 +426,30 @@ HTML = r"""<!doctype html>
     <div class="grid" id="boardBlocks"></div>
     <div class="row" style="margin-top:10px">
       <label>模式</label>
-      <label><input type="radio" name="mode" value="array" checked onchange="setMode('array')"> 光伏阵列 + 线束（一张图）</label>
-      <label><input type="radio" name="mode" value="batch" onchange="setMode('batch')"> 批量（一行一张 · 全部拼进同一张图纸）</label>
+    <label><input type="radio" name="mode" value="array" checked onchange="setMode('array');schedulePreview()"> 光伏阵列 + 线束（一张图）</label>
+    <label><input type="radio" name="mode" value="batch" onchange="setMode('batch');schedulePreview()"> 批量（一行一张 · 每张一个 DXF）</label>
     </div>
     <div class="row" id="arrayRow" style="display:none">
-      <label>方案</label><select id="scheme" onchange="onSchemeChange()"
-        title="方案的生成逻辑逐个补；现在只有“串的排法”按方案自动定：带 LYNX 的方案从下往上排，其余从左往右排">
-        <option value="Harness">Harness</option>
-        <option value="ALEX">ALEX</option>
-        <option value="IBEX+AI跳线">IBEX+AI跳线</option>
-        <option value="IBEX PLUS">IBEX PLUS</option>
-        <option value="IBEX+CU跳线">IBEX+CU跳线</option>
-        <option value="LYNX+CU跳线">LYNX+CU跳线</option>
-        <option value="LYNX+AI跳线">LYNX+AI跳线</option>
-        <option value="LYNX+Harness">LYNX+Harness</option>
-        <option value="LYNX+IBEX">LYNX+IBEX</option>
+      <!-- 组件块不让用户挑了：三个下拉藏起来，由“哪一端靠近汇流箱”自动决定首/中/尾块 -->
+      <span id="modBox" style="display:none">
+        <label>组件 首块</label><select id="mod1"></select>
+        <label>中间块</label><select id="mod2"></select>
+        <label>尾块</label><select id="mod3"></select>
+      </span>
+      <label>组件朝向</label><select id="polnear" onchange="applyPolarityNear();schedulePreview()"
+        title="哪一端靠近汇流箱(CBX)：选正极就把正极出线那端排在汇流箱旁；选负极就整串反过来排，负极那端贴着汇流箱">
+        <option value="pos">正极靠近汇流箱</option>
+        <option value="neg">负极靠近汇流箱</option>
       </select>
-      <label>组件 首块</label><select id="mod1"></select>
-      <label>中间块</label><select id="mod2"></select>
-      <label>尾块</label><select id="mod3"></select>
       <label>每串板数</label><input type="number" id="nper" value="20" min="2" step="1">
       <label>串数</label><input type="text" id="nstr" value="4" style="width:92px"
         title="支持分段：4 = 一组 4 串；2+3 / 3+2 = 支架两侧各多少串，段与段之间走“跨支架距离”">
-      <label>跨支架距离</label><input type="number" id="brkgap" value="4" step="1"
+      <label>跨支架距离</label><input type="number" id="brkgap" value="30" step="1"
         title="串数写成分段（如 2+3）时，支架两侧之间的固定距离">
-      <label>板间/串间净空</label><input type="number" id="gapx" value="1" step="1"
-        title="板与板之间、以及串与串之间，都用这一个净空值（按你的要求：串间净空跟板间净空一致）">
+      <label>板间净空</label><input type="number" id="gapx" value="1" step="1"
+        title="同一串里，板与板之间的净空">
+      <label>串间净空</label><input type="number" id="gapy" value="30" step="1"
+        title="串与串之间的净空；留空 = 跟板间净空一样（贴紧）。默认 30 ≈ 一个板宽，这样 4 串一眼能看出是 4 串">
       <label>串的排法</label><select id="dir">
         <option value="right">从左往右接</option>
         <option value="down">从上往下叠</option></select>
@@ -419,16 +462,17 @@ HTML = r"""<!doctype html>
       <div class="row" style="margin-top:0;align-items:center;gap:8px">
         <b>电机 / BHA 桩位置</b>
         <button class="ghost" onclick="addBha()">加一处</button>
-        <button class="ghost" onclick="addBhaMid()" title="每串都在中间那块之后插一处（位置 = 每串板数 ÷ 2，四舍五入）">每串中点插一处</button>
+        <button class="ghost" onclick="addBhaMid()" title="按整排总块数取中间：4 串 × 20 块 → 第 40 块之后">整排中间插一处</button>
+        <button class="ghost" onclick="addBhaSeg()" title="每个支架（每段）中点各一处，串数写 3+3 时就是前后各一个">每段中点插一处</button>
         <button class="ghost" onclick="clearBha()">清空</button>
         <span id="bhaHint" style="font-size:12px;color:var(--muted)">
-          两块板之间插一个 BHA 桩块（可再挂电机）；<b>串号留空 = 每段一个</b>（3+3 → 前后各一个），想每串都放写 1-6。</span>
+          两块板之间插一个 BHA 桩块（可再挂电机）；位置 = 整排第几块之后（不分串）：4 串 × 20 块共 80 块，填 40 就是正中间；0 或留空 = 最前面；写“每段” = 每段中点各一处。留空整列 = 不插桩。</span>
       </div>
       <div id="bhaBox" style="max-height:118px;overflow:auto;border:1px solid var(--line);border-radius:8px">
         <table style="width:100%;border-collapse:collapse;font-size:13px">
           <thead><tr>
-            <th style="text-align:left;padding:6px">串号</th>
-            <th style="text-align:left;padding:6px">插在第几块之后</th>
+            <th style="text-align:left;padding:6px">串数</th>
+            <th style="text-align:left;padding:6px">整排第几块之后</th>
             <th style="text-align:left;padding:6px">BHA 桩块</th>
             <th style="text-align:left;padding:6px">电机块</th>
             <th style="text-align:left;padding:6px">电机旋转</th>
@@ -466,7 +510,9 @@ HTML = r"""<!doctype html>
         </table>
       </div>
       <div class="row" style="margin-top:0">
-        <span style="font-size:12px;color:var(--muted)">一行 = 一张图（各调一份新外框模板，互相独立），全部拼进同一个 DXF；
+        <label><input type="checkbox" id="bsheet"> 拼成一张图纸</label>
+        <span style="font-size:12px;color:var(--muted)">一行 = 一张图（各调一份新外框模板，互相独立）：默认
+          <b>每张各自出一个 DXF</b>（＋一个打包 zip）；勾上“拼成一张图纸”才全部拼进同一个 DXF。
           填完点“下一步：填线束”，在线束页按“生成”一次画完。
           每行的<b>BHA位置</b>留空 = 沿用“光伏阵列”模式下那张桩表。</span>
       </div>
@@ -691,7 +737,7 @@ let harnessBlocks=[];   // 线束块库（组成线束链用）
 let mode='array';
 let frameList=[];       // 外框图列表（批量模式的外框图下拉要用）
 let batchRows=[];       // 批量模式：一行 = 一张图（各自独立参数）
-let bhaRows=[];         // 电机/BHA 桩：一行 = 一处插入（串号 / 第几块之后 / 桩块 / 电机块 …）
+let bhaRows=[];         // 电机/BHA 桩：一行 = 一处插入（整排第几块之后 / 桩块 / 电机块 …）
 const AWG_MAIN=['750 MCM','500 MCM','2/0 AWG','4 AWG','6 AWG','8 AWG','10 AWG'];
 const AWG_BRANCH=['10 AWG','12 AWG'];
 function setMode(m){
@@ -767,7 +813,9 @@ function schedulePreview(){
   prevTimer=setTimeout(doPreview, 350);
 }
 async function doPreview(){
+  applyPolarityNear();          // 组件朝向 -> 首/中/尾块（藏起来的三个下拉）
   if(prevTimer){clearTimeout(prevTimer);prevTimer=null;}
+  if(mode==='batch'){ return doPreviewBatch(); }     // 批量：按表格每一行各画一张
   const box=document.getElementById('arrPrev'); if(!box) return;
   const my=++prevSeq;
   box.innerHTML='<div style="color:#727577;font-size:12px;padding:6px">更新中…</div>';
@@ -777,8 +825,8 @@ async function doPreview(){
               n_strings:String(v('nstr','4')||'4').trim(),
               bracket_gap:parseFloat(v('brkgap',4))||4,
               gap_x:parseFloat(v('gapx',1))||0,
-              // 串间净空跟板间净空一致（界面不再分开填；null = 跟随板间净空）
-              gap_y:null,
+              // 串间净空：界面上单独一格；留空 = 跟随板间净空
+              gap_y:((String(v('gapy','')).trim()==='')?null:(parseFloat(v('gapy',30))||0)),
               dir:v('dir','right'),
               head_block:String(v('headblk','CBX')||'').trim(),
               head_gap:parseFloat(v('headgap',60))||60,
@@ -798,6 +846,54 @@ async function doPreview(){
       box.innerHTML='<div style="color:#e57373;font-size:12px;padding:6px">预览失败：'
                     +e+'</div>';
   }
+}
+
+// 批量模式的预览：一行一张小图（用那一行自己的串数/板数），最多画前 8 行
+async function doPreviewBatch(){
+  applyPolarityNear();
+  const box=document.getElementById('arrPrev'); if(!box) return;
+  const my=++prevSeq;
+  const rows=batchRows.slice(0,8);
+  if(!rows.length){
+    box.innerHTML='<div style="color:#727577;font-size:12px;padding:6px">'
+      +T('批量表还是空的：先填份数，点“按上面参数铺出 N 行”')+'</div>';
+    RT(box); return;
+  }
+  box.innerHTML='<div style="color:#727577;font-size:12px;padding:6px">更新中…</div>';
+  const out=[];
+  for(let i=0;i<rows.length;i++){
+    const r=rows[i];
+    const body={scheme:v('scheme','Harness'),
+                module_first:v('mod1',''), module_mid:v('mod2',''), module_last:v('mod3',''),
+                n_per:parseInt(r._nperEl?r._nperEl.value:r.n_per)||parseInt(v('nper',20))||20,
+                n_strings:String((r._nstrEl?r._nstrEl.value:r.n_str)||v('nstr','4')||'4').trim(),
+                bracket_gap:parseFloat(v('brkgap',4))||4,
+                gap_x:parseFloat(v('gapx',1))||0,
+                gap_y:((String(v('gapy','')).trim()==='')?null:(parseFloat(v('gapy',30))||0)),
+                dir:v('dir','right'),
+                head_block:String(v('headblk','CBX')||'').trim(),
+                head_gap:parseFloat(v('headgap',60))||60,
+                bha:(String(r.bha||'').trim()||bhaPayload())};
+    try{
+      const rr=await fetch('/api/preview_array',{method:'POST',
+                 headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const d=await rr.json();
+      if(my!==prevSeq) return;                 // 后面的请求已经把这次挤掉
+      out.push('<div style="border-top:1px solid #2a2c2e;padding:5px 2px">'+
+        '<div style="font-size:12px;color:#B9BEC3">'+(r.no||('SLD-'+pad3(i+1)))+
+        ' · '+T('串数')+' '+String((r._nstrEl?r._nstrEl.value:r.n_str)||'')+
+        ' · '+T('每串板数')+' '+String((r._nperEl?r._nperEl.value:r.n_per)||'')+'</div>'+
+        (d.svg||('<div style="color:#727577;font-size:12px">'+T(d.info||'没有预览')+'</div>'))+
+        '</div>');
+    }catch(e){
+      out.push('<div style="color:#e57373;font-size:12px;padding:4px">预览失败：'+e+'</div>');
+    }
+  }
+  if(my!==prevSeq) return;
+  box.innerHTML=out.join('')+(batchRows.length>rows.length
+    ? '<div style="font-size:12px;color:#727577;padding:6px 2px">'
+      +T('（还有 '+(batchRows.length-rows.length)+' 行没画，预览最多显示前 8 行）')+'</div>' : '');
+  RT(box);
 }
 async function loadBlocks(){
   const fs=document.getElementById('frame');
@@ -925,8 +1021,26 @@ function progStop(finalText){
   setTimeout(()=>{document.getElementById('progWrap').style.display='none';},1500);
   RT(document.getElementById('progWrap'));
 }
+// 组件朝向：哪一端靠近汇流箱(CBX)。
+// before = {'pos': 正极靠近（默认，块序 PV-POS → MIDDLE-PV → END-NEG）,
+//           'neg': 负极靠近（块序反过来，负极那端排到左边贴着 CBX）}
+const POL_BLOCKS={pos:{f:'PV-POS',m:'MIDDLE-PV',l:'END-NEG'},
+                  neg:{f:'END-NEG',m:'MIDDLE-PV',l:'PV-POS'}};
+function applyPolarityNear(){
+  const sel=document.getElementById('polnear'); if(!sel) return;
+  const b=POL_BLOCKS[sel.value]||POL_BLOCKS.pos;
+  const set=(id,val)=>{
+    const e=document.getElementById(id); if(!e) return;
+    if(!Array.prototype.some.call(e.options,function(o){return o.value===val;})){
+      const o=document.createElement('option'); o.value=val; o.textContent=val; e.appendChild(o);
+    }
+    e.value=val;
+  };
+  set('mod1',b.f); set('mod2',b.m); set('mod3',b.l);
+}
 // 阵列模式的一组公共参数（阵列模式与批量模式共用；批量模式每行再覆盖串数/板数）
 function arrayCommon(){
+  applyPolarityNear();          // 生成前再对齐一次，保证和“组件朝向”一致
   return {harness:chain, gap:parseFloat(v('gap',40))||40,
           scheme:v('scheme','Harness'),
           module_first:v('mod1',''), module_mid:v('mod2',''), module_last:v('mod3',''),
@@ -935,7 +1049,7 @@ function arrayCommon(){
           n_strings:String(v('nstr','4')||'4').trim(),
           bracket_gap:parseFloat(v('brkgap',4))||4,
           gap_x:parseFloat(v('gapx',1))||0,
-          gap_y:null,              // 串间净空跟板间净空一致
+          gap_y:((String(v('gapy','')).trim()==='')?null:(parseFloat(v('gapy',30))||0)),
           dir:v('dir','right'),
           harness_scale:parseFloat(v('hscale',1))||1,
           fixed_gap:parseFloat(v('fixgap',30))||30,
@@ -966,24 +1080,34 @@ function onSchemeChange(){
 }
 
 // ---------- 电机 / BHA 桩位置（一行 = 一处插入） ----------
-// 在某一串的两块板之间插一个 BHA 桩块（可以再挂一个电机块）：桩右边的板整体右移、
-// 阵列自动变长（位移 = 桩宽 + 左净空 + 右净空 - 板间净空）。生成时按结构化的行送给后端。
-function addBha(s,after,stub,motor,rot,gl,gr,note){
-  bhaRows.push({s:(s===undefined?'':String(s)),
-                after:(after===undefined?'':String(after)),
+// 在两块板之间插一个 BHA 桩块（可以再挂一个电机块）。位置填**整排第几块之后**
+// （整个阵列连续数、不分串：4 串 × 20 块填 40 = 正中间），也可以写“每段”。
+// 桩右边的板整体右移、阵列自动变长（位移 = 桩宽 + 左净空 + 右净空 - 板间净空）。
+function addBha(pos,stub,motor,rot,gl,gr,note,nstr){
+  bhaRows.push({nstr:(nstr===undefined?'':String(nstr)),
+                pos:(pos===undefined?'':String(pos)),
                 stub:stub||'', motor:motor||'',
                 rot:(rot===undefined?'':String(rot)),
                 gap_l:(gl===undefined?'':String(gl)),
                 gap_r:(gr===undefined?'':String(gr)), note:note||''});
   renderBha();
 }
-function addBhaMid(){                    // 每串中点插一处（给个下手的地方）
-  const nper=parseInt(document.getElementById('nper').value)||20;
-  addBha('', Math.max(1,Math.round(nper/2)), '', '', 0);
+function bhaTotalBlocks(){               // 整排总块数 = 各段串数之和 × 每串板数
+  const nper=parseInt(document.getElementById('nper').value)||0;
+  const gs=(document.getElementById('nstr').value||'').match(/\d+/g)||[];
+  const ns=gs.reduce((a,b)=>a+parseInt(b),0)||0;
+  return ns*nper;
+}
+function addBhaMid(){                    // 整排正中间插一处（4 串 × 20 块 → 第 40 块之后）
+  const total=bhaTotalBlocks();
+  addBha(Math.max(0,Math.floor(total/2)), '', '', 0);
+}
+function addBhaSeg(){                    // 每段（每支架）中点各一处
+  addBha('每段', '', '', 0);
 }
 function clearBha(){ bhaRows=[]; renderBha(); }
 function bhaPayload(){
-  return bhaRows.map(r=>({s:r.s, after:r.after, stub:r.stub, motor:r.motor,
+  return bhaRows.map(r=>({nstr:r.nstr, pos:r.pos, stub:r.stub, motor:r.motor,
                           rot:r.rot, gap_l:r.gap_l, gap_r:r.gap_r}))
                 .filter(r=>(r.stub||r.motor));      // 空行不送
 }
@@ -997,13 +1121,15 @@ function renderBha(){
     // 以前这里所有格子共用同一个 let e，回调里写 e.value 读到的其实是**最后一个**
     // 输入框（备注）的值 —— 于是“插在第几块之后”填什么都会被存成空串（=0），
     // 桩永远排在每串最前面；串号、电机旋转也一样读错框。
-    let c=td(); const eS=document.createElement('input');
-    eS.type='text'; eS.value=r.s; eS.placeholder='全部';
-    eS.title='串号：留空=所有串；也可以写 1,3 或 2-4';
-    eS.style.width='70px'; eS.oninput=()=>{r.s=eS.value;}; c.appendChild(eS);
-    c=td(); const eA=document.createElement('input'); eA.type='number'; eA.min='0'; eA.step='1';
-    eA.value=r.after; eA.title='插在第几块之后：0=第 1 块之前；填得比每串板数大就排到最后';
-    eA.style.width='90px'; eA.oninput=()=>{r.after=eA.value;}; c.appendChild(eA);
+    let c=td(); const eNS=document.createElement('input');
+    eNS.type='text'; eNS.value=r.nstr; eNS.placeholder='全部';
+    eNS.title='这一行管几串的结构：留空 = 图里所有结构都插；填 4 = 只插 4 串那种结构（也能写 3+3）';
+    eNS.style.width='70px'; eNS.oninput=()=>{r.nstr=eNS.value;}; c.appendChild(eNS);
+    c=td(); const eS=document.createElement('input');
+    eS.type='text'; eS.value=r.pos; eS.placeholder='留空=最前面';
+    eS.title='整排第几块之后（不分串）：0/留空=最前面；4 串 × 20 块填 40 = 正中间；'
+           + '填得比总块数大就排到最后；写“每段”=每段中点各一处';
+    eS.style.width='110px'; eS.oninput=()=>{r.pos=eS.value;}; c.appendChild(eS);
     [['stub','（桩块）'],['motor','（不带电机）']].forEach(function(pair){
       const key=pair[0], blank=pair[1];
       const cc=td(); const s=document.createElement('select'); s.style.maxWidth='150px';
@@ -1066,9 +1192,12 @@ function renderBatch(){
     s.value=r.frame||''; s.onchange=()=>{r.frame=s.value;}; c.appendChild(s);
     c=td(); e=document.createElement('input'); e.type='text';
     e.value=r.n_str; e.style.width='70px'; e.title='串数：4 或 2+3（分段，段间走跨支架距离）';
-    e.oninput=()=>{r.n_str=String(e.value||'').trim()||'1';}; c.appendChild(e);
+    e.oninput=()=>{r.n_str=String(e.value||'').trim()||'1';};
+    r._nstrEl=e;                       // 预览直接读这一格当前显示的值，别用可能过期的对象值
+    c.appendChild(e);
     c=td(); e=document.createElement('input'); e.type='number'; e.min='1';
-    e.value=r.n_per; e.style.width='70px'; e.oninput=()=>{r.n_per=parseInt(e.value)||1;}; c.appendChild(e);
+    e.value=r.n_per; e.style.width='70px'; e.oninput=()=>{r.n_per=parseInt(e.value)||1;};
+    r._nperEl=e; c.appendChild(e);
     // 每张图自己的线号：留空 = 沿用上面“主线线号/支线线号”那套
     [['awg_main',AWG_MAIN],['awg_branch',AWG_BRANCH]].forEach(([key,opts])=>{
       c=td(); const s=document.createElement('select'); s.style.width='96px';
@@ -1079,8 +1208,10 @@ function renderBatch(){
     // 这一张图自己的 BHA 桩/电机位置：留空 = 沿用上面那张表
     c=td(); e=document.createElement('input'); e.type='text';
     e.value=r.bha||''; e.placeholder='同上';
-    e.title='写法：串号:第几块之后:桩块:电机块:旋转:左净空:右净空，多处用 ; 隔开；' +
-            '例 全部:10:BHA:MOTOR:0 或 2:5:BHA:MOTOR:90;4:12:BHA。留空 = 沿用上面那张 BHA 表';
+    e.title='写法：整排第几块之后:桩块:电机块:旋转:左净空:右净空，多处用 ; 隔开；' +
+            '位置按整排连续数（不分串）：4 串 × 20 块填 40 = 正中间；' +
+            '写“每段”=每段中点各一处。例 40:BHA:MOTOR:0 或 20:BHA:MOTOR:90;60:BHA。' +
+            '留空 = 沿用上面那张 BHA 表';
     e.style.width='190px'; e.oninput=()=>{r.bha=e.value;}; c.appendChild(e);
     c=td(); e=document.createElement('input'); e.type='text';
     e.value=r.note||''; e.style.width='100%'; e.oninput=()=>{r.note=e.value;}; c.appendChild(e);
@@ -1098,16 +1229,45 @@ async function genBatch(){
   RT(document.getElementById('out'));
   progStart('提交…');
   const body=arrayCommon();
-  body.frame=frame0; body.rows=batchRows;
+  // 关键：按**表格格子里当前显示的值**组行，别用行对象里那份可能过期的值
+  // （以前就是这里读旧值，于是三张图都按同一套参数画，长度/板子/线束一模一样）。
+  const trs=Array.prototype.slice.call(document.querySelectorAll('#bBody tr'));
+  const rowsDom=trs.map(function(tr){
+    const c=tr.querySelectorAll('td');
+    const val=function(k){ const cell=c[k]; if(!cell) return '';
+      const e=cell.querySelector('input,select'); return e?String(e.value||'').trim():''; };
+    return {no:val(0), frame:val(1), n_str:val(2), n_per:val(3),
+            awg_main:val(4), awg_branch:val(5), bha:val(6), note:val(7)};
+  }).filter(function(r){ return r.n_str||r.no; });
+  body.frame=frame0;
+  body.rows=(rowsDom.length?rowsDom:batchRows);
   body.cols=parseInt(v('sheetc',2))||2;
   body.gap_sheet_x=parseFloat(v('sheetgx',300))||0;
   body.gap_sheet_y=parseFloat(v('sheetgy',300))||0;
   body.order=(document.getElementById('sheetorder')||{}).value||'row';
+  body.separate=!((document.getElementById('bsheet')||{}).checked);   // 默认：一行一张、各自出 DXF
   body.to_cad=document.getElementById('tocad').checked;
   body.cad_original=false;          // 画到 CAD 一律画副本，不动外框原文件
   const r=await fetch('/api/generate_batch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const d=await r.json();
   progStop('完成');
+  if(d.files){                       // 每张一个 DXF（默认）
+    lastOut={dxf:(d.files[0]?d.files[0].name:''), csv:''};
+    const rowsHtml=d.files.map(f=>
+        '<div class="dlrow"><b style="min-width:110px">'+f.no+'</b>'+
+        '<button class="ghost" onclick="fileAct(\'open\',\''+f.name+'\')">用CAD打开</button> '+
+        '<button class="ghost" onclick="fileAct(\'export\',\''+f.name+'\')">DXF存桌面</button> '+
+        (f.csv_url?('<button class="ghost" onclick="fileAct(\'export\',\''+f.csv+'\')">CSV存桌面</button> '):'')+
+        (f.url?('<a class="dl" href="'+f.url+'" download>下载 DXF</a>'):'')+'</div>').join('');
+    document.getElementById('out').innerHTML =
+      '<div class="dlrow"><b>共 '+(d.total||d.files.length)+' 张，成功 '+d.files.length+' 张</b>'+
+        (d.zip_url?('<a class="dl" href="'+d.zip_url+'" download>下载全部(zip)</a> '):'')+
+        '<button class="ghost" onclick="fileAct(\'reveal\')">打开输出文件夹</button>'+
+        '<span id="fileMsg" style="font-size:12px;color:var(--muted);margin-left:8px"></span></div>'+
+      rowsHtml+'<div id="log">'+(d.log||[]).join('\n')+'</div>';
+    RT(document.getElementById('out'));
+    return;
+  }
   lastOut={dxf:d.dxf_name||'', csv:d.csv_name||''};
   document.getElementById('out').innerHTML =
     (d.svg||'') +
@@ -1200,6 +1360,40 @@ async function checkUpdate(apply){
   finally{ b.disabled=false; }
 }
 checkUpdate();     // 启动时静默检查一次（失败不影响使用）
+</script>
+<script type="module">
+// morphicons：两个图标的“变形”切换（无框架、离线可用，文件在 /vendor/morphicons/）
+import { defineMorphIcon } from '/vendor/morphicons/element.js';
+defineMorphIcon();
+const GLOBE=[['circle',{cx:'12',cy:'12',r:'10'}],
+             ['path',{d:'M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20'}],
+             ['path',{d:'M2 12h20'}]];
+const LANGS=[['path',{d:'m5 8 6 6'}],['path',{d:'m4 14 6-6 2-3'}],['path',{d:'M2 5h12'}],
+             ['path',{d:'M7 2h1'}],['path',{d:'m22 22-5-10-5 10'}],['path',{d:'M14 18h6'}]];
+const DOWN=[['path',{d:'M12 15V3'}],
+            ['path',{d:'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4'}],
+            ['path',{d:'m7 10 5 5 5-5'}]];
+const REFRESH=[['path',{d:'M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8'}],
+               ['path',{d:'M21 3v5h-5'}],
+               ['path',{d:'M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16'}],
+               ['path',{d:'M8 16H3v5'}]];
+function setI(id,node){const e=document.getElementById(id); if(e) e.icon=node;}
+function goI(id,node){const e=document.getElementById(id); if(e&&e.morphTo) e.morphTo(node);}
+try{ setI('langIcon', LANG==='en'?LANGS:GLOBE); setI('updIcon', REFRESH); }catch(e){}
+const _setLang=window.setLang;
+window.setLang=function(v){ _setLang(v);
+  const tag=document.getElementById('langTag'); if(tag) tag.textContent=(v==='en')?'EN':'中';
+  goI('langIcon', v==='en'?LANGS:GLOBE);
+};
+const _checkUpdate=window.checkUpdate;
+window.checkUpdate=async function(apply){
+  try{ goI('updIcon', REFRESH); }catch(e){}
+  const r=await _checkUpdate(apply);
+  try{ const m=((document.getElementById('updMsg')||{}).textContent||'');
+       const tag=document.getElementById('updTag'); if(tag) tag.textContent=m||'';
+       goI('updIcon', /新版本|更新已下载|有更新/.test(m)?DOWN:REFRESH); }catch(e){}
+  return r;
+};
 </script>
 </body></html>
 """
@@ -1366,6 +1560,23 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps({"blocks": out, "frames": list_frames(),
                                         "out_files": outs}).encode("utf-8"),
                        "application/json")
+        elif self.path.startswith("/vendor/"):
+            # morphicons 的 ESM 文件：必须用 text/javascript 送，浏览器才肯 import
+            rel = self.path.split("?", 1)[0][len("/vendor/"):]
+            p = os.path.normpath(os.path.join(vendor_dir(), rel.replace("/", os.sep)))
+            root = os.path.normpath(vendor_dir())
+            if not p.startswith(root) or not os.path.isfile(p):
+                self._send(404, b"not found"); return
+            ct = ("text/javascript; charset=utf-8" if p.lower().endswith(".js")
+                  else ("application/json" if p.lower().endswith(".json")
+                        else "text/plain; charset=utf-8"))
+            body = open(p, "rb").read()
+            self.send_response(200)
+            self.send_header("Content-Type", ct)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         elif self.path.startswith("/out/"):
             fn = os.path.basename(self.path)
             p = os.path.join(OUTDIR, fn)
@@ -1569,6 +1780,85 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         box["log"] = log
+        # separate：一行一张、各自出一个 DXF（默认）；不勾才拼成一张图纸
+        separate = bool(req.get("separate", True))
+        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        os.makedirs(OUTDIR, exist_ok=True)
+
+        if separate:
+            files, total = [], len(items)
+            for n, it in enumerate(items, 1):
+                def pg(pct, stage, _n=n, _total=total):
+                    set_progress(int(((_n - 1) + max(0.0, min(100.0, float(pct))) / 100.0)
+                                     * 100.0 / _total),
+                                 "第 %d/%d 张 · %s" % (_n, _total, stage), box["log"][-8:])
+
+                box["log"] = box["log"] + ["—— 第 %d/%d 张 %s（%s）——"
+                                           % (n, total, it["name"],
+                                              os.path.basename(it["frame"]))]
+                spec = it["spec"]
+                text, log2, wires = wr.build_array_frame(it["frame"], spec,
+                                                         log=box["log"], progress=pg)
+                box["log"] = log2 or box["log"]
+                if not text:
+                    box["log"].append("⚠ %s 没画出来，跳过这张" % it["name"])
+                    continue
+                fn = "%s_%s.dxf" % (safe_name(it["name"]), stamp)
+                outpath = os.path.join(OUTDIR, fn)
+                with open(outpath, "w", encoding="latin-1", newline="") as f:
+                    f.write(text)
+                csv_fn = ""
+                try:
+                    ag.write_csv(os.path.splitext(outpath)[0] + ".csv", wires)
+                    csv_fn = os.path.splitext(fn)[0] + ".csv"
+                except Exception as ex:
+                    box["log"].append("⚠ 线长清单没写成: %s" % ex)
+                if req.get("to_cad"):
+                    box["log"].append("—— 第 %d/%d 张画到 CAD ——" % (n, total))
+                    dwg = os.path.join(FRAMES_DIR,
+                                       os.path.splitext(os.path.basename(it["frame"]))[0] + ".dwg")
+                    try:
+                        cd.draw_dxf_into_cad(
+                            outpath, dwg, box["log"], use_original=False, copy_dir=OUTDIR,
+                            only_blocks=set(
+                                [x for x in (spec.get("module", ""), spec.get("module_first", ""),
+                                             spec.get("module_mid", ""), spec.get("module_last", ""))
+                                 if x] + list(spec.get("harness") or [])
+                                + wr.bha_block_names(spec.get("bha"), 0, 0)),
+                            progress=pg)
+                    except Exception as ex:
+                        import traceback
+                        box["log"].append("⚠ 画到 CAD 失败: %s: %s" % (type(ex).__name__, ex))
+                        box["log"].extend(traceback.format_exc().strip().splitlines()[-4:])
+                files.append({"no": it["name"], "name": fn, "url": "/out/" + fn,
+                              "csv": csv_fn,
+                              "csv_url": ("/out/" + csv_fn) if csv_fn else ""})
+            zip_fn = ""
+            if files:
+                zip_fn = "批量_%s.zip" % stamp
+                try:
+                    with zipfile.ZipFile(os.path.join(OUTDIR, zip_fn), "w",
+                                         zipfile.ZIP_DEFLATED) as z:
+                        for f in files:
+                            z.write(os.path.join(OUTDIR, f["name"]), f["name"])
+                            if f["csv"]:
+                                z.write(os.path.join(OUTDIR, f["csv"]), f["csv"])
+                except Exception as ex:
+                    box["log"].append("⚠ 打包 zip 失败: %s" % ex)
+                    zip_fn = ""
+            box["log"].append("批量完成：共 %d 张，成功 %d 张（每张一个 DXF）"
+                              % (total, len(files)))
+            set_progress(100, "批量完成", box["log"][-8:])
+            PROGRESS["running"] = False
+            sw = stale_warning()
+            if sw:
+                box["log"] = [sw] + list(box["log"])
+            self._send(200, json.dumps(
+                {"files": files, "total": total, "separate": True,
+                 "zip_url": ("/out/" + zip_fn) if zip_fn else "",
+                 "zip_name": zip_fn, "off": log,
+                 "log": box["log"]}).encode("utf-8"), "application/json")
+            return
 
         def pg(pct, stage):
             set_progress(pct, stage, box["log"][-8:])

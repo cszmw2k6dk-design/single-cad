@@ -22,6 +22,9 @@ SRC = os.path.abspath(os.path.dirname(SPEC))
 datas = [
     (os.path.join(SRC, "blocklib"), "blocklib"),
     (os.path.join(SRC, "templates"), "templates"),
+    # 界面上那两个图标 + morphicons（语言切换/检查更新的 SVG 变形）
+    (os.path.join(SRC, "vendor"), "vendor"),
+    (os.path.join(SRC, "icons"), "icons"),
 ]
 for _doc in ("Barnett连线自动化_交接手册.docx", "图纸模板_块清单.txt", "version.json"):
     _p = os.path.join(SRC, _doc)
